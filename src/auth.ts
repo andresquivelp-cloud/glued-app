@@ -23,12 +23,19 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
   callbacks: {
     // Only verified Google accounts on the allowlist can sign in.
+    // Wrong domain and not invited get their own message on the login page.
     signIn({ profile }) {
-      return !!profile?.email_verified && isAllowed(profile.email);
+      const email = (profile?.email ?? "").toLowerCase();
+      if (!profile?.email_verified || !email.endsWith("@getglued.co")) return "/login?error=domain";
+      if (!isAllowed(email)) return "/login?error=invite";
+      return true;
     },
     // Runs in proxy.ts on every page: no session, no access.
     authorized({ auth, request }) {
-      if (request.nextUrl.pathname.startsWith("/login")) return true;
+      const p = request.nextUrl.pathname;
+      if (p.startsWith("/login")) return true;
+      if (p.startsWith("/api/")) return true;      // API routes answer 401 themselves, as JSON
+      if (process.env.NODE_ENV !== "production" && process.env.GLIDE_DEV_USER) return true;      // local testing only
       return isAllowed(auth?.user?.email);
     },
   },

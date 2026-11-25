@@ -4,8 +4,8 @@ import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Glued",
-  description: "Glued internal app",
+  title: "Glide",
+  description: "Glide, the Glued app",
   robots: { index: false, follow: false },
 };
 
