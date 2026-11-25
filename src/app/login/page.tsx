@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
 import { signIn } from "@/auth";
 import { currentUser } from "@/lib/session";
 
@@ -14,6 +15,7 @@ const MESSAGES: Record<string, string> = {
 };
 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string; callbackUrl?: string; out?: string }> }) {
+  await connection();      // per request: sign-in state and a fresh form token
   const { error, callbackUrl, out } = await searchParams;
   if (!error && (await currentUser())) redirect("/");
   const msg = error ? MESSAGES[error] ?? "Something went wrong. Try again." : null;

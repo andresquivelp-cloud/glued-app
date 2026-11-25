@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
 import { currentUser, isOwner } from "@/lib/session";
 import { readDoc } from "@/lib/store";
 
@@ -7,6 +8,7 @@ export const instant = false;
 const code = "block overflow-x-auto rounded-lg bg-[#0b1030] px-4 py-3 font-mono text-[12.5px] leading-5 text-[#e8ebf7]";
 
 export default async function ApiDocs() {
+  await connection();      // per request: sign-in state and a fresh form token
   const u = await currentUser();
   if (!u) redirect("/login?callbackUrl=/api-docs");
   const doc = await readDoc();
