@@ -145,7 +145,7 @@ export async function metrics(opts: { from?: string | null; to?: string | null; 
       "Numbers come from what the app stores: daily numbers (Smartlead, Explee, the calls API, Update numbers), deals, the cost sheet and the channel plans.",
       "The app also shows the Q4 files for dates before Smartlead and Explee were connected (and calls before the calls API). This API does not, so older totals can be lower here.",
       "Costs leave out team pay. Monthly bills are spread over the days asked for.",
-      "Digital Socios deal values are one month of the retainer.",
+      "Deal values are the whole signed contract: a Digital Socios retainer is the monthly fee times the months signed.",
     ],
   };
 }

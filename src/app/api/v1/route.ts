@@ -25,7 +25,7 @@ export async function GET() {
     },
     deal_ops: {
       stage: '{ op: "stage", stage: "Call booked" }  Stages: Positive reply, Call booked, Proposal, Final approval, Won',
-      set: '{ op: "set", field, value }  field: value (dollars), probability (0-100), owner (andres, david, dan), next_step, next_step_due (2026-12-01 or null), note (replaces the notes)',
+      set: '{ op: "set", field, value }  field: value (dollars, the whole signed contract: a retainer is the monthly fee times the months), probability (0-100), owner (andres, david, dan), next_step, next_step_due (2026-12-01 or null), note (replaces the notes)',
       note_append: '{ op: "note_append", text }  adds to the end of the notes, for call summaries',
       check: '{ op: "check", key, on }  key: has_money, wants_project, likes_us. 3 of 3 is Hot, 2 Warm, 1 or none Cold',
       todo_add: '{ op: "todo_add", text, due?, owner? }',
