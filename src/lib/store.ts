@@ -32,6 +32,7 @@ export type Doc = {
   leads: Lead[];
   leadsVersion?: number;
   calls?: Call[];
+  close_rate?: number | null;      // % of leads that become clients, set in Edit plan or the API. null: the last 30 days' rate
   updated_at: string | null;
 };
 

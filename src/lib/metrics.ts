@@ -114,16 +114,20 @@ export async function metrics(opts: { from?: string | null; to?: string | null; 
   const eplAll = p30 > 0 ? e30 / p30 : q4.p > 0 ? q4.e / q4.p : 350;
   const callRate = p30 > 0 && calls30 > 0 ? calls30 / p30 * 100 : 15, closeRate = wins30 > 0 && calls30 > 0 ? wins30 / calls30 * 100 : 7.6;
   const share = (() => { if (!brand) return 1; let g = 0, t = 0; for (const c of CHANNELS) { const s = mo(c, r30, today, brand); if (s.split) { g += s.sent; t += last30[c].sent; } } return t > 0 ? g / t : 0.5; })();
-  const capDays = range(fa, fb);
+  const capDays = range(fa, fb), planCr = typeof doc.close_rate === "number" && doc.close_rate > 0 ? doc.close_rate : null;      // % of leads that become clients, from the plan
   const perDay = (c: Channel, d: string) => { const mk = MK[d.slice(5, 7)], pj = mk ? doc.projections?.[c]?.[mk] : undefined; const m = pj && typeof pj.e === "number" ? pj.e : latest(doc, c, "real_capacity", today)?.v ?? 0; return m / mDays(d.slice(0, 7)) * share; };
   const byCh = Object.fromEntries(CHANNELS.map((c) => {
-    const e = capDays.reduce((x, d) => x + perDay(c, d), 0), own = last30[c].positives > 0, epl = own ? last30[c].sent / last30[c].positives : eplAll, l = e / epl;
-    return [c, { emails: r0(e), emails_per_positive: r0(epl), emails_per_positive_source: own ? `${last30[c].sent} emails, ${last30[c].positives} positive replies in the last 30 days` : "no positive reply in the last 30 days: all channels' rate",
-      leads: r0(l), calls: r0(l * callRate / 100), closes: r1(l * callRate / 100 * closeRate / 100), healthy_capacity_month: latest(doc, c, "real_capacity", today)?.v ?? null,
+    const own = last30[c].positives > 0, epl30 = own ? last30[c].sent / last30[c].positives : eplAll;
+    /* each day's leads use that month's plan ratio when one is set (Edit plan or POST /projections), else the last 30 days */
+    const eplD = (d: string) => { const mk = MK[d.slice(5, 7)], r = mk ? doc.projections?.[c]?.[mk]?.r : null; return typeof r === "number" && r > 0 ? r : epl30; };
+    const e = capDays.reduce((x, d) => x + perDay(c, d), 0), l = capDays.reduce((x, d) => x + perDay(c, d) / eplD(d), 0), epl = l > 0 ? e / l : epl30;
+    const planR = ["dec", "jan", "feb"].some((mk) => typeof doc.projections?.[c]?.[mk]?.r === "number");
+    return [c, { emails: r0(e), emails_per_positive: r0(epl), emails_per_positive_source: planR ? "the plan's ratio (months without one use the last 30 days)" : own ? `${last30[c].sent} emails, ${last30[c].positives} positive replies in the last 30 days` : "no positive reply in the last 30 days: all channels' rate",
+      leads: r0(l), calls: r0(l * callRate / 100), closes: r1(planCr != null ? l * planCr / 100 : l * callRate / 100 * closeRate / 100), healthy_capacity_month: latest(doc, c, "real_capacity", today)?.v ?? null,
       plan: Object.fromEntries(["dec", "jan", "feb"].map((mk) => [mk, doc.projections?.[c]?.[mk]?.e ?? null])) }];
   })) as unknown as Record<Channel, { emails: number | null; leads: number | null; calls: number | null; closes: number | null }>;
   const sends = CHANNELS.reduce((x, c) => x + (byCh[c].emails ?? 0), 0), leads = CHANNELS.reduce((x, c) => x + (byCh[c].leads ?? 0), 0);
-  const calls = leads * callRate / 100, closes = calls * closeRate / 100, qD = QUOTA.deals_per_brand_month * parts * 2;
+  const calls = leads * callRate / 100, closes = planCr != null ? leads * planCr / 100 : calls * closeRate / 100, qD = QUOTA.deals_per_brand_month * parts * 2;
   const weekly: Record<string, number | string>[] = [];
   for (let i = 0; i < capDays.length; i += 7) { const w = capDays.slice(i, i + 7); weekly.push({ week_from: w[0], week_to: w[w.length - 1], ...Object.fromEntries(CHANNELS.map((c) => [c, Math.round(w.reduce((x, d) => x + perDay(c, d), 0))])) }); }
   const capacity = {
@@ -133,6 +137,7 @@ export async function metrics(opts: { from?: string | null; to?: string | null; 
     targets: { sending_capacity: 1200000 / (brand ? 2 : 1), daily: 20000 / (brand ? 2 : 1), leads: 2000 / (brand ? 2 : 1), calls: r0(qD / (closeRate / 100)), closes: qD },
     rates_last_30_days: { from: r30, to: today, emails_per_positive_all: r0(eplAll), call_rate_pct: r1(callRate), call_rate_source: p30 > 0 && calls30 > 0 ? `${calls30} calls from ${p30} positive replies` : "no calls stored for the last 30 days: 15% used",
       close_rate_pct: r1(closeRate), close_rate_source: wins30 > 0 ? `${wins30} deals won from ${calls30} calls` : "no deal won in the last 30 days: this year's 7.6% used", brand_share_of_emails: r2(share) },
+    lead_to_client_pct: planCr != null ? planCr : r2(callRate * closeRate / 100), lead_to_client_source: planCr != null ? "set in the plan (Edit plan or POST /projections close_rate)" : "the last 30 days: call rate times close rate",
     by_channel: byCh, weekly,
   };
   return {
