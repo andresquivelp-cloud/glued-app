@@ -3,7 +3,7 @@ import { auth, isAllowed } from "@/auth";
 export type AppUser = { email: string; name: string; image: string | null; pid: string | null };
 
 // The prototype's people, by the part of the email before the @.
-const PIDS: Record<string, string> = { andres: "andres", david: "david", daniel: "dan" };
+const PIDS: Record<string, string> = { andres: "andres", david: "david", "david.arrue": "david", daniel: "dan" };
 
 // Local testing only: GLIDE_DEV_USER signs you in without Google. Ignored in production.
 const devUser = () => (process.env.NODE_ENV !== "production" ? process.env.GLIDE_DEV_USER : undefined);
