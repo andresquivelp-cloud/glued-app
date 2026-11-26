@@ -104,7 +104,7 @@ export async function metrics(opts: { from?: string | null; to?: string | null; 
 
   /* ---- Capacity: tomorrow plus 60 days. What the channels can send (each month's plan, or the healthy capacity), and the leads, calls
      and closes that should come from it at the rates of the last 30 days (the app's Capacity tab) */
-  const fa = addDays(today, 1), fb = addDays(today, 60), r30 = addDays(today, -29), MK: Record<string, string> = { "12": "dec", "01": "jan", "02": "feb" };
+  const fa = addDays(today, 1), fb = addDays(today, 60), r30 = addDays(today, -29), MK: Record<string, string> = { "11": "nov", "12": "dec", "01": "jan", "02": "feb" };
   const mo = sums.bind(null, doc);
   const last30 = Object.fromEntries(CHANNELS.map((c) => [c, mo(c, r30, today, 0)])) as Record<Channel, ReturnType<typeof sums>>;
   const e30 = CHANNELS.reduce((x, c) => x + last30[c].sent, 0), p30 = CHANNELS.reduce((x, c) => x + last30[c].positives, 0);
@@ -121,10 +121,10 @@ export async function metrics(opts: { from?: string | null; to?: string | null; 
     /* each day's leads use that month's plan ratio when one is set (Edit plan or POST /projections), else the last 30 days */
     const eplD = (d: string) => { const mk = MK[d.slice(5, 7)], r = mk ? doc.projections?.[c]?.[mk]?.r : null; return typeof r === "number" && r > 0 ? r : epl30; };
     const e = capDays.reduce((x, d) => x + perDay(c, d), 0), l = capDays.reduce((x, d) => x + perDay(c, d) / eplD(d), 0), epl = l > 0 ? e / l : epl30;
-    const planR = ["dec", "jan", "feb"].some((mk) => typeof doc.projections?.[c]?.[mk]?.r === "number");
+    const planR = ["nov", "dec", "jan", "feb"].some((mk) => typeof doc.projections?.[c]?.[mk]?.r === "number");
     return [c, { emails: r0(e), emails_per_positive: r0(epl), emails_per_positive_source: planR ? "the plan's ratio (months without one use the last 30 days)" : own ? `${last30[c].sent} emails, ${last30[c].positives} positive replies in the last 30 days` : "no positive reply in the last 30 days: all channels' rate",
       leads: r0(l), calls: r0(l * callRate / 100), closes: r1(planCr != null ? l * planCr / 100 : l * callRate / 100 * closeRate / 100), healthy_capacity_month: latest(doc, c, "real_capacity", today)?.v ?? null,
-      plan: Object.fromEntries(["dec", "jan", "feb"].map((mk) => [mk, doc.projections?.[c]?.[mk]?.e ?? null])) }];
+      plan: Object.fromEntries(["nov", "dec", "jan", "feb"].map((mk) => [mk, doc.projections?.[c]?.[mk]?.e ?? null])) }];
   })) as unknown as Record<Channel, { emails: number | null; leads: number | null; calls: number | null; closes: number | null }>;
   const sends = CHANNELS.reduce((x, c) => x + (byCh[c].emails ?? 0), 0), leads = CHANNELS.reduce((x, c) => x + (byCh[c].leads ?? 0), 0);
   const calls = leads * callRate / 100, closes = planCr != null ? leads * planCr / 100 : calls * closeRate / 100, qD = QUOTA.deals_per_brand_month * parts * 2;

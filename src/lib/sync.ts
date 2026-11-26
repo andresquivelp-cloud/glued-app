@@ -1,4 +1,4 @@
-import { type Doc, type BrandSplit, type Lead, setDay, addLog, todayInSV, updateDoc } from "./store";
+import { type Doc, type BrandSplit, type Lead, type Channel, setDay, addLog, todayInSV, updateDoc } from "./store";
 
 // Refresh: pull Smartlead and Explee into the daily store.
 // Smartlead (ScaledMail and Mailin inboxes): emails sent, replies, bounces and positive replies per day, split Glued / Digital Socios
@@ -316,6 +316,14 @@ async function exPositives(key: string, since: string): Promise<Raw[]> {
   return out;
 }
 
+/* Nov 26 (Andrés): November becomes a plan month. Filled once with the team's November plan; after that, Edit plan and POST /projections own it */
+const NOV_PLAN: Partial<Record<Channel, { e: number; r: number }>> = { ScaledMail: { e: 126945, r: 356 }, Explee: { e: 52500, r: 383 }, MCC: { e: 95040, r: 364 }, Mailin: { e: 0, r: 364 } };
+function seedPlan(doc: Doc) {
+  if ((doc.planSeed ?? 0) >= 1) return;
+  for (const [c, v] of Object.entries(NOV_PLAN) as [Channel, { e: number; r: number }][]) doc.projections[c] = { ...(doc.projections[c] ?? {}), nov: { e: v.e, r: v.r } };
+  doc.planSeed = 1; addLog(doc, "system", "plan: November set (ScaledMail 126,945, Explee 52,500, MCC 95,040, Mailin 0)");
+}
+
 async function addLeads(doc: Doc): Promise<Report> {
   doc.leads ??= [];
   if ((doc.leadsVersion ?? 1) < 2) { doc.leads = []; doc.leadsVersion = 2; }      /* Nov 25: Smartlead leads redone with company, brand and reply text */
@@ -351,6 +359,7 @@ async function addLeads(doc: Doc): Promise<Report> {
 export async function runSync(who: string, opts: { full?: boolean } = {}): Promise<{ doc: Doc; report: Report[] }> {
   const today = todayInSV(), report: Report[] = [];
   const doc = await updateDoc(async (doc) => {
+    seedPlan(doc);
     report.length = 0;
     const tasks: [string, string | undefined, (k: string) => Promise<Report>][] = [
       ["Smartlead", process.env.SMARTLEAD_API_KEY, (k) => smartlead(doc, k, today, !!opts.full)],

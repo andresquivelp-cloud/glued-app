@@ -13,7 +13,7 @@ export async function POST(req: Request) {
   if (errors.length) return fail(errors.join("; "));
   const pj = b.projections as Record<string, { e: unknown; r: unknown }> | undefined;
   const months: Record<string, { e: number | null; r: number | null }> = {};
-  if (pj && typeof pj === "object") for (const mk of ["dec", "jan", "feb"]) {
+  if (pj && typeof pj === "object") for (const mk of ["nov", "dec", "jan", "feb"]) {
     const p = pj[mk]; if (!p) continue;
     const ok = (v: unknown, min: number) => v == null || (typeof v === "number" && Number.isInteger(v) && v >= min);
     if (!ok(p.e, 0) || !ok(p.r, 1)) return fail(`${mk}: emails must be 0 or more, ratio 1 or more`);

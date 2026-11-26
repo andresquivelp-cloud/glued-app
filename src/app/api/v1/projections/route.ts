@@ -1,7 +1,7 @@
 import { readDoc, updateDoc, isChannel, CHANNELS, addLog } from "@/lib/store";
 import { json, fail, botOk, readJson } from "@/lib/api";
 
-const NEED = "Send Authorization: Bearer <GLIDE_API_TOKEN>", MONTHS = ["dec", "jan", "feb"];
+const NEED = "Send Authorization: Bearer <GLIDE_API_TOKEN>", MONTHS = ["nov", "dec", "jan", "feb"];
 // Each channel's plan for the next months (the Capacity tab's "Edit plan"): emails to send and emails per positive reply
 export async function GET(req: Request) {
   if (!botOk(req)) return fail(NEED, 401);
@@ -19,7 +19,7 @@ export async function POST(req: Request) {
   if (hasCr && cr !== null && !(typeof cr === "number" && cr > 0 && cr <= 100)) errors.push("close_rate must be a percent above 0 and up to 100 (1.5 means 1.5%), or null");
   rows.forEach((r, i) => {
     if (!isChannel(r.channel)) errors.push(`row ${i}: channel must be ${CHANNELS.join(", ")}`);
-    if (!MONTHS.includes(String(r.month))) errors.push(`row ${i}: month must be dec, jan or feb`);
+    if (!MONTHS.includes(String(r.month))) errors.push(`row ${i}: month must be nov, dec, jan or feb`);
     const ok = (v: unknown, min: number) => v === undefined || v === null || (typeof v === "number" && Number.isInteger(v) && v >= min);
     if (!ok(r.emails, 0)) errors.push(`row ${i}: emails must be a whole number, 0 or more, or null`);
     if (!ok(r.ratio, 1)) errors.push(`row ${i}: ratio must be a whole number, 1 or more, or null`);

@@ -31,6 +31,7 @@ export type Doc = {
   log: { at: string; who: string; what: string }[];
   leads: Lead[];
   leadsVersion?: number;
+  planSeed?: number;      // one-time plan fills already applied
   calls?: Call[];
   close_rate?: number | null;      // % of leads that become clients, set in Edit plan or the API. null: the last 30 days' rate
   updated_at: string | null;
