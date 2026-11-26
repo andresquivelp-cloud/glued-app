@@ -45,14 +45,12 @@ async function readWithTag(): Promise<{ doc: Doc; etag: string | null }> {
   }
 }
 
-// Read, change, write. If someone else wrote in between (Grokbot and a refresh at once), start over, up to 4 times.
+// Read, change, write. Last write wins: the Blob etag check refused every write in production (ETag mismatch), so it is off.
 export async function updateDoc(change: (doc: Doc) => void | Promise<void>): Promise<Doc> {
-  for (let i = 0; ; i++) {
-    const { doc, etag } = await readWithTag();
-    await change(doc);
-    try { await writeDoc(doc, etag); return doc; }
-    catch (e) { if (i < 3 && /Precondition|412/i.test(String((e as Error)?.name) + String(e))) continue; throw e; }
-  }
+  const { doc } = await readWithTag();
+  await change(doc);
+  await writeDoc(doc);
+  return doc;
 }
 
 function isNotFound(e: unknown) {
@@ -60,12 +58,12 @@ function isNotFound(e: unknown) {
   return /NotFound|ENOENT|not found/i.test(s);
 }
 
-async function writeDoc(doc: Doc, etag: string | null) {
+async function writeDoc(doc: Doc) {
   doc.updated_at = new Date().toISOString();
   doc.log = doc.log.slice(-300);
   const body = JSON.stringify(doc);
   if (!blobOn()) { await mkdir(path.dirname(LOCAL), { recursive: true }); await writeFile(LOCAL, body); return; }
-  await put(KEY, body, { access: "private", allowOverwrite: true, addRandomSuffix: false, contentType: "application/json", cacheControlMaxAge: 60, ...(etag ? { ifMatch: etag } : {}) });
+  await put(KEY, body, { access: "private", allowOverwrite: true, addRandomSuffix: false, contentType: "application/json", cacheControlMaxAge: 60 });
   // one backup a day, kept as it was at the day's first write
   const day = doc.updated_at.slice(0, 10);
   await put(`glide/backups/${day}.json`, body, { access: "private", allowOverwrite: false, addRandomSuffix: false, contentType: "application/json" }).catch(() => {});
