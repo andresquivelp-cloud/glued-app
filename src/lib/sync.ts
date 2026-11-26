@@ -244,13 +244,24 @@ const clip = (t: unknown, n = 600) => String(t ?? "").replace(/<style[\s\S]*?<\/
 const dayAfter = (iso: string) => addDays(svDay(iso), 1);
 type Raw = Omit<Lead, "n" | "st" | "p" | "who" | "t" | "v" | "step" | "due" | "added">;
 
+const histOf = (m: Record<string, unknown>) => {
+  for (const k of ["message_history", "email_history", "history", "messages"]) if (Array.isArray(m[k])) return m[k] as Record<string, unknown>[];
+  return [] as Record<string, unknown>[];
+};
+const FREE_MAIL = /^(gmail|googlemail|yahoo|hotmail|outlook|live|icloud|me|aol|proton|protonmail|msn)\./i;
+// a company name for a lead that came without one: Smartlead's lead record, else the email's domain ("acme-foods.com" becomes "Acme Foods")
+async function slCompany(key: string, email: string) {
+  try { const r = await sl<Record<string, unknown>>(key, "/leads/", { email }); const c = String(r?.company_name ?? (r?.custom_fields as Record<string, unknown>)?.company ?? ""); if (c && c !== "null") return c; } catch { /* use the domain */ }
+  const d = email.split("@")[1] ?? ""; if (!d || FREE_MAIL.test(d)) return "";
+  return d.split(".")[0].split(/[-_]/).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
 async function slPositives(key: string, since: string, dbg: Record<string, unknown>): Promise<Raw[]> {
   const cats = await sl<{ id: number; sentiment_type?: string }[]>(key, "/leads/fetch-categories").catch(() => []);
   const pos = (Array.isArray(cats) ? cats : []).filter((c) => c.sentiment_type === "positive").map((c) => c.id);
   const ids = pos.length ? pos.slice(0, 10) : [1, 2, 5];
   const out: Raw[] = [];
   for (let offset = 0; offset < 600; offset += 20) {
-    const qs = new URLSearchParams({ api_key: key, fetch_message_history: "false" });
+    const qs = new URLSearchParams({ api_key: key, fetch_message_history: "true" });
     const r = await fetch(`${SL}/master-inbox/inbox-replies?${qs}`, {
       method: "POST", headers: { "content-type": "application/json" }, cache: "no-store", signal: AbortSignal.timeout(45000),
       body: JSON.stringify({ offset, limit: 20, sortBy: "REPLY_TIME_DESC", filters: { leadCategories: { categoryIdsIn: ids }, replyTimeBetween: [since, new Date().toISOString()] } }),
@@ -259,14 +270,17 @@ async function slPositives(key: string, since: string, dbg: Record<string, unkno
     if (!r.ok) throw new Error(`Smartlead inbox said ${r.status}: ${text.slice(0, 160)}`);
     const j = JSON.parse(text) as Record<string, unknown>;
     const items = listOf(j, "messages", "data", "items", "leads");
-    if (offset === 0) dbg.sl_first = items[0] ? Object.keys(items[0]).slice(0, 30) : j && Object.keys(j);
+    if (offset === 0) { dbg.sl_first = items[0] ? Object.keys(items[0]).slice(0, 40) : j && Object.keys(j); const h = items[0] && histOf(items[0]); dbg.sl_hist = h && h[0] ? Object.keys(h[h.length - 1]) : null; }
     for (const m of items) {
+      // the inbox answers flat: lead_email, lead_first_name, email_campaign_name, last_reply_time, email_lead_map_id (older docs nest them under lead/campaign)
       const lead = (m.lead ?? {}) as Record<string, unknown>, camp = (m.campaign ?? {}) as Record<string, unknown>, last = (m.last_message ?? {}) as Record<string, unknown>;
-      const email = String(lead.email ?? m.lead_email ?? m.email ?? ""), first = String(lead.first_name ?? m.lead_first_name ?? ""), lastN = String(lead.last_name ?? m.lead_last_name ?? "");
-      const at = String(last.received_at ?? m.last_reply_time ?? m.reply_time ?? m.last_activity ?? ""), cname = String(camp.name ?? m.campaign_name ?? "");
+      const email = String(m.lead_email ?? lead.email ?? m.email ?? ""), first = String(m.lead_first_name ?? lead.first_name ?? ""), lastN = String(m.lead_last_name ?? lead.last_name ?? "");
+      const at = String(m.last_reply_time ?? last.received_at ?? m.reply_time ?? ""), cname = String(m.email_campaign_name ?? camp.name ?? m.campaign_name ?? "");
       if (!email || !at) continue;
-      out.push({ id: "sl:" + String(m.campaign_lead_map_id ?? m.id ?? email), person: `${first} ${lastN}`.trim(), email, company: String(lead.company ?? lead.company_name ?? m.lead_company ?? ""),
-        domain: email.split("@")[1], b: brandOf(cname) === "ds" ? 2 : 1, source: "Smartlead", campaign: cname, reply: clip(last.body ?? m.last_reply ?? ""), at: new Date(at).toISOString() });
+      const hist = histOf(m), inbound = hist.filter((x) => /reply|received|inbound/i.test(String(x.type ?? x.direction ?? x.message_type ?? ""))), lastIn = inbound[inbound.length - 1] ?? {};
+      out.push({ id: "sl:" + String(m.email_lead_map_id ?? m.campaign_lead_map_id ?? m.email_lead_id ?? email), person: `${first} ${lastN}`.trim(), email,
+        company: String(m.lead_company ?? m.company_name ?? lead.company ?? lead.company_name ?? ""), domain: email.split("@")[1], b: brandOf(cname) === "ds" ? 2 : 1, source: "Smartlead", campaign: cname,
+        reply: clip(lastIn.email_body ?? lastIn.body ?? lastIn.text ?? last.body ?? ""), at: new Date(at).toISOString() });
     }
     const total = Number(j.total_count ?? j.total ?? 0);
     if (items.length < 20 || (total && offset + 20 >= total)) break;
@@ -300,6 +314,7 @@ async function exPositives(key: string, since: string): Promise<Raw[]> {
 
 async function addLeads(doc: Doc): Promise<Report> {
   doc.leads ??= [];
+  if ((doc.leadsVersion ?? 1) < 2) { doc.leads = []; doc.leadsVersion = 2; }      /* Nov 25: Smartlead leads redone with company, brand and reply text */
   const known = new Set(doc.leads.map((l) => l.id)), mails = new Set(doc.leads.map((l) => l.email.toLowerCase()).filter(Boolean));
   const last = doc.leads.reduce((a, l) => (l.at > a ? l.at : a), ""), back = new Date(Date.now() - 2 * 864e5).toISOString();
   const since = !doc.leads.length || !last ? LEADS_FROM : back < LEADS_FROM ? LEADS_FROM : back;
@@ -310,6 +325,7 @@ async function addLeads(doc: Doc): Promise<Report> {
   for (const r of raw.sort((a, b) => a.at.localeCompare(b.at))) {
     const em = r.email.toLowerCase();
     if (known.has(r.id) || (em && mails.has(em))) continue;
+    if (!r.company && r.source === "Smartlead" && process.env.SMARTLEAD_API_KEY) r.company = await slCompany(process.env.SMARTLEAD_API_KEY, r.email);
     known.add(r.id); if (em) mails.add(em);
     const base = r.company || r.person || r.email; let n = base;
     for (let i = 2; doc.leads.some((l) => l.n === n); i++) n = r.person && r.person !== base && i === 2 ? `${base} (${r.person})` : `${base} ${i}`;

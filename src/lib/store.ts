@@ -25,6 +25,7 @@ export type Doc = {
   sync: Record<string, { at: string; ok: boolean; msg: string; backfilled_from?: string }>;
   log: { at: string; who: string; what: string }[];
   leads: Lead[];
+  leadsVersion?: number;
   updated_at: string | null;
 };
 
