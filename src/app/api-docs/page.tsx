@@ -135,7 +135,7 @@ curl "${host}/api/v1/deals?name=Acme%20Co" -H "Authorization: Bearer $GLIDE_API_
         <code className={code + " mt-3 whitespace-pre"}>{`curl "${host}/api/v1/metrics?from=2026-11-01&to=2026-11-25&brand=both" -H "Authorization: Bearer $GLIDE_API_TOKEN"
 curl "${host}/api/v1/data?parts=days,calls,costs" -H "Authorization: Bearer $GLIDE_API_TOKEN"`}</code>
         <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-[#4a5070]">
-          <li>metrics: every number on Financials, Analytics and Forecast, worked out from what is stored.</li>
+          <li>metrics: every number on Financials, Analytics and Capacity, worked out from what is stored.</li>
           <li>data: the raw records. To fix something, use the matching POST: days, calls, deals, projections, costs or plan.</li>
           <li>The full list of endpoints is at <a className="underline" href="/api/v1">/api/v1</a>.</li>
         </ul>

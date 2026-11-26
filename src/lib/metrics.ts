@@ -2,7 +2,7 @@ import { readDoc, CHANNELS, todayInSV, type Doc, type Channel } from "./store";
 import { allBases, readStores, view, type DealView } from "./deals";
 import { readCosts, type Cost } from "./costs";
 
-// Every number on the Sales tabs (Financials, Analytics, Forecast), worked out on the server so Grokbot can read and check them.
+// Every number on the Sales tabs (Financials, Analytics, Capacity), worked out on the server so Grokbot can read and check them.
 // They come from what is stored: the daily numbers (Smartlead, Explee, the calls API, Update numbers), the deals, the cost sheet and the plans.
 // The app also falls back to the Q4 files for dates before the tools were connected; this API does not, and says so in "notes".
 export const QUOTA = { deals_per_brand_month: 3, aov: 15000, from: "2026-10" };
@@ -102,45 +102,42 @@ export async function metrics(opts: { from?: string | null; to?: string | null; 
     channels, inbox_health: inboxes, daily,
   };
 
-  /* ---- Forecast: tomorrow plus 60 days */
-  const fa = addDays(today, 1), fb = addDays(today, 60), MK: Record<string, string> = { "12": "dec", "01": "jan", "02": "feb" };
-  const q4 = CHANNELS.reduce((x, c) => { const s = sums(doc, c, "2026-10-01", today, 0); return { e: x.e + s.sent, p: x.p + s.positives }; }, { e: 0, p: 0 });
-  const epl = q4.p > 0 ? q4.e / q4.p : 350;
-  const share = (() => { if (!brand) return 1; let g = 0, t = 0; for (const c of CHANNELS) { const s = sums(doc, c, addDays(today, -29), today, brand), a = sums(doc, c, addDays(today, -29), today, 0); if (s.split) { g += s.sent; t += a.sent; } } return t > 0 ? g / t : 0.5; })();
+  /* ---- Capacity: tomorrow plus 60 days. What the channels can send (each month's plan, or the healthy capacity), and the leads, calls
+     and closes that should come from it at the rates of the last 30 days (the app's Capacity tab) */
+  const fa = addDays(today, 1), fb = addDays(today, 60), r30 = addDays(today, -29), MK: Record<string, string> = { "12": "dec", "01": "jan", "02": "feb" };
   const mo = sums.bind(null, doc);
-  const thisMonth = CHANNELS.reduce((x, c) => { const s = mo(c, today.slice(0, 8) + "01", today, 0); return { p: x.p + s.positives, c: x.c + s.calls }; }, { p: 0, c: 0 });
-  const callsMonth = thisMonth.c + (doc.calls ?? []).filter((c) => c.date >= today.slice(0, 8) + "01" && c.status !== "canceled" && !(CHANNELS as readonly string[]).includes(c.channel)).length;
-  const callRate = thisMonth.p > 0 && callsMonth > 0 ? callsMonth / thisMonth.p * 100 : 16.5;
-  const winsQ = deals.filter((d) => d.stage === "Won").map(wonAt).filter((x) => x && x >= "2026-10-01").length, callsQ = CHANNELS.reduce((x, c) => x + mo(c, "2026-10-01", today, 0).calls, 0);
-  const winRate = winsQ >= 3 && callsQ > 0 ? winsQ / callsQ * 100 : 7.6;
-  const mons = months(fa, fb).map((m) => { const md = mDays(m), s = fa > m + "-01" ? fa : m + "-01", e = fb < `${m}-${md}` ? fb : `${m}-${md}`; return { m, fr: nDays(s, e) / md, mk: MK[m.slice(5)] }; });
-  const plan = Object.fromEntries(CHANNELS.map((c) => {
-    const cap = latest(doc, c, "real_capacity", today)?.v ?? 0, sm = mo(c, today.slice(0, 8) + "01", today, 0), own = sm.positives > 0 ? sm.sent / sm.positives : null;
-    let e = 0, l = 0; const byMonth: Record<string, { emails: number; ratio: number; planned: boolean }> = {};
-    for (const x of mons) { const pj = x.mk ? doc.projections?.[c]?.[x.mk] : undefined, em = pj && typeof pj.e === "number" ? pj.e : cap, ra = pj && typeof pj.r === "number" && pj.r > 0 ? pj.r : own ?? epl;
-      byMonth[x.m] = { emails: em, ratio: r0(ra)!, planned: !!(pj && typeof pj.e === "number") }; e += em * x.fr; l += em * x.fr / ra; }
-    return [c, { healthy_capacity_month: cap, months: byMonth, emails_60d: r0(e * share), leads_60d: r0(l * share) }];
-  }));
-  const sends = CHANNELS.reduce((x, c) => x + (plan[c].emails_60d ?? 0), 0), leads = CHANNELS.reduce((x, c) => x + (plan[c].leads_60d ?? 0), 0);
-  const calls = leads * callRate / 100, dealsX = calls * winRate / 100, qD = QUOTA.deals_per_brand_month * parts * 2;
-  const needCalls = qD / (winRate / 100), needLeads = needCalls / (callRate / 100), needEmails = needLeads * epl, gap = Math.max(0, needEmails - sends);
-  const perInbox = 160, warm = 21, sendDays = 60 - warm, spendPlan = costFor(costs.rows, fa, fb, brand, "plan");
-  const weighted = open.reduce((x, d) => x + d.weighted, 0);
-  const forecast = {
+  const last30 = Object.fromEntries(CHANNELS.map((c) => [c, mo(c, r30, today, 0)])) as Record<Channel, ReturnType<typeof sums>>;
+  const e30 = CHANNELS.reduce((x, c) => x + last30[c].sent, 0), p30 = CHANNELS.reduce((x, c) => x + last30[c].positives, 0);
+  const calls30 = CHANNELS.reduce((x, c) => x + last30[c].calls, 0) + (doc.calls ?? []).filter((c) => c.date >= r30 && c.date <= today && c.status !== "canceled" && !(CHANNELS as readonly string[]).includes(c.channel)).length;
+  const wins30 = deals.filter((d) => d.stage === "Won").map(wonAt).filter((x) => x && x >= r30 && x <= today).length;
+  const q4 = CHANNELS.reduce((x, c) => { const s = mo(c, "2026-10-01", today, 0); return { e: x.e + s.sent, p: x.p + s.positives }; }, { e: 0, p: 0 });
+  const eplAll = p30 > 0 ? e30 / p30 : q4.p > 0 ? q4.e / q4.p : 350;
+  const callRate = p30 > 0 && calls30 > 0 ? calls30 / p30 * 100 : 15, closeRate = wins30 > 0 && calls30 > 0 ? wins30 / calls30 * 100 : 7.6;
+  const share = (() => { if (!brand) return 1; let g = 0, t = 0; for (const c of CHANNELS) { const s = mo(c, r30, today, brand); if (s.split) { g += s.sent; t += last30[c].sent; } } return t > 0 ? g / t : 0.5; })();
+  const capDays = range(fa, fb);
+  const perDay = (c: Channel, d: string) => { const mk = MK[d.slice(5, 7)], pj = mk ? doc.projections?.[c]?.[mk] : undefined; const m = pj && typeof pj.e === "number" ? pj.e : latest(doc, c, "real_capacity", today)?.v ?? 0; return m / mDays(d.slice(0, 7)) * share; };
+  const byCh = Object.fromEntries(CHANNELS.map((c) => {
+    const e = capDays.reduce((x, d) => x + perDay(c, d), 0), own = last30[c].positives > 0, epl = own ? last30[c].sent / last30[c].positives : eplAll, l = e / epl;
+    return [c, { emails: r0(e), emails_per_positive: r0(epl), emails_per_positive_source: own ? `${last30[c].sent} emails, ${last30[c].positives} positive replies in the last 30 days` : "no positive reply in the last 30 days: all channels' rate",
+      leads: r0(l), calls: r0(l * callRate / 100), closes: r1(l * callRate / 100 * closeRate / 100), healthy_capacity_month: latest(doc, c, "real_capacity", today)?.v ?? null,
+      plan: Object.fromEntries(["dec", "jan", "feb"].map((mk) => [mk, doc.projections?.[c]?.[mk]?.e ?? null])) }];
+  })) as unknown as Record<Channel, { emails: number | null; leads: number | null; calls: number | null; closes: number | null }>;
+  const sends = CHANNELS.reduce((x, c) => x + (byCh[c].emails ?? 0), 0), leads = CHANNELS.reduce((x, c) => x + (byCh[c].leads ?? 0), 0);
+  const calls = leads * callRate / 100, closes = calls * closeRate / 100, qD = QUOTA.deals_per_brand_month * parts * 2;
+  const weekly: Record<string, number | string>[] = [];
+  for (let i = 0; i < capDays.length; i += 7) { const w = capDays.slice(i, i + 7); weekly.push({ week_from: w[0], week_to: w[w.length - 1], ...Object.fromEntries(CHANNELS.map((c) => [c, Math.round(w.reduce((x, d) => x + perDay(c, d), 0))])) }); }
+  const capacity = {
     from: fa, to: fb,
-    rates: { call_rate_pct: r1(callRate), call_rate_source: thisMonth.p > 0 && callsMonth > 0 ? `${callsMonth} calls from ${thisMonth.p} positive replies this month` : "no calls stored this month yet: 16.5% (November from the Q4 files)",
-      win_rate_pct: r1(winRate), win_rate_source: winsQ >= 3 ? `${winsQ} deals won from ${callsQ} calls since Oct 1` : "7.6%: 13 new clients from 171 Glued calls this year", emails_per_lead: r0(epl), aov: QUOTA.aov },
-    expected: { emails: sends, leads, calls: r0(calls), deals: r1(dealsX), revenue: r0(dealsX * QUOTA.aov) },
-    targets: { emails: 600000 * 2 / (brand ? 2 : 1), leads: 1000 * 2 / (brand ? 2 : 1), deals: qD, revenue: qD * QUOTA.aov },
-    what_it_takes: { calls_needed: r0(needCalls), leads_needed: r0(needLeads), emails_needed: r0(needEmails), emails_short: r0(gap), inboxes_to_buy_now: gap ? Math.ceil(gap / (perInbox / 30 * sendDays)) : 0, explee_cost_instead: r0(gap * 0.04),
-      assumptions: `${perInbox} emails a month per inbox, ${warm} days of warm-up, Explee at $0.04 an email` },
-    revenue_in_sight: { open_pipeline_weighted: r0(weighted), new_from_outbound: r0(dealsX * QUOTA.aov), total: r0(weighted + dealsX * QUOTA.aov), quota: qD * QUOTA.aov },
-    planned_spend: spendPlan.usd, cost_per_expected_lead: r2(div(spendPlan.usd, leads)), expected_cac: r0(dealsX >= 0.5 ? spendPlan.usd / dealsX : null),
-    by_channel: plan,
+    sending_capacity: sends, daily_average: r0(sends / 60),
+    projected: { leads, calls: r0(calls), closes: r1(closes), revenue: r0(closes * QUOTA.aov) },
+    targets: { sending_capacity: 1200000 / (brand ? 2 : 1), daily: 20000 / (brand ? 2 : 1), leads: 2000 / (brand ? 2 : 1), calls: r0(qD / (closeRate / 100)), closes: qD },
+    rates_last_30_days: { from: r30, to: today, emails_per_positive_all: r0(eplAll), call_rate_pct: r1(callRate), call_rate_source: p30 > 0 && calls30 > 0 ? `${calls30} calls from ${p30} positive replies` : "no calls stored for the last 30 days: 15% used",
+      close_rate_pct: r1(closeRate), close_rate_source: wins30 > 0 ? `${wins30} deals won from ${calls30} calls` : "no deal won in the last 30 days: this year's 7.6% used", brand_share_of_emails: r2(share) },
+    by_channel: byCh, weekly,
   };
   return {
     window: { from, to, brand: ["both", "Glued", "Digital Socios"][brand], today },
-    financials, analytics, forecast,
+    financials, analytics, capacity,
     notes: [
       "Numbers come from what the app stores: daily numbers (Smartlead, Explee, the calls API, Update numbers), deals, the cost sheet and the channel plans.",
       "The app also shows the Q4 files for dates before Smartlead and Explee were connected (and calls before the calls API). This API does not, so older totals can be lower here.",

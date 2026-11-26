@@ -22,7 +22,7 @@ export async function GET(req: Request) {
   out.how_to_change = {
     "days (sent, replies, positives, bounced, calls, capacity...)": "POST /api/v1/days",
     "booked calls": "POST /api/v1/calls", "deals (stage, checks, to-dos, notes, links, comments)": "POST /api/v1/deals",
-    "channel plans (Forecast)": "POST /api/v1/projections", costs: "POST /api/v1/costs", "Plan tab": "POST /api/v1/plan", "every computed number": "GET /api/v1/metrics",
+    "channel plans (Capacity)": "POST /api/v1/projections", costs: "POST /api/v1/costs", "Plan tab": "POST /api/v1/plan", "every computed number": "GET /api/v1/metrics",
   };
   return json(out);
 }
