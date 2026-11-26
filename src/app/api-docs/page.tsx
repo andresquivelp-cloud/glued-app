@@ -71,7 +71,48 @@ export default async function ApiDocs() {
       <section className="mt-8">
         <h2 className="text-base font-semibold">Pull Smartlead and Explee now</h2>
         <code className={code + " mt-3 whitespace-pre"}>{`curl -X POST ${host}/api/v1/sync -H "Authorization: Bearer $GLIDE_API_TOKEN"`}</code>
-        <p className="mt-2 text-sm text-[#4a5070]">Same as the refresh button. It also runs by itself every morning at 6:00 El Salvador time.</p>
+        <p className="mt-2 text-sm text-[#4a5070]">Same as the refresh button. It also runs by itself every hour from 8am to 6pm, and at 11:50pm, El Salvador time.</p>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-base font-semibold">Read the Pipeline</h2>
+        <code className={code + " mt-3 whitespace-pre"}>{`curl "${host}/api/v1/deals?stage=Positive%20reply" \\
+  -H "Authorization: Bearer $GLIDE_API_TOKEN"
+
+curl "${host}/api/v1/deals?name=Acme%20Co" -H "Authorization: Bearer $GLIDE_API_TOKEN"`}</code>
+        <p className="mt-2 text-sm text-[#4a5070]">Each deal comes with its stage, value, owner, temperature and the 3 checks, plus its to-dos, notes, links, comments and history. Filters: name, stage, owner, brand, temperature, q.</p>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-base font-semibold">Change a deal (after a call, for example)</h2>
+        <code className={code + " mt-3 whitespace-pre"}>{`curl -X POST ${host}/api/v1/deals \\
+  -H "Authorization: Bearer $GLIDE_API_TOKEN" -H "Content-Type: application/json" \\
+  -d '{ "name": "Acme Co", "ops": [
+    { "op": "stage", "stage": "Final approval" },
+    { "op": "check", "key": "has_money", "on": true },
+    { "op": "note_append", "text": "Call Nov 26: budget approved, wants to start Dec 1." },
+    { "op": "comment_add", "text": "Summary of today's call: ..." },
+    { "op": "todo_add", "text": "Send the contract", "due": "2026-11-27", "owner": "andres" },
+    { "op": "todo_done", "text": "Book a call" },
+    { "op": "link_add", "url": "https://drive.google.com/...", "name": "Acme one-pager" },
+    { "op": "set", "field": "value", "value": 14000 }
+  ] }'`}</code>
+        <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-[#4a5070]">
+          <li>Stages: Positive reply, Call booked, Proposal, Final approval, Won. Won sets the chance to 100%.</li>
+          <li>Checks: has_money, wants_project, likes_us. 3 of 3 is Hot, 2 is Warm, 1 or none is Cold.</li>
+          <li>set fields: value, probability, owner (andres, david, dan), next_step, next_step_due, note.</li>
+          <li>Up to 50 changes a call. They apply in order; if one is wrong, none are saved and the error says which.</li>
+          <li>Every change shows in the deal&apos;s History as Grokbot.</li>
+        </ul>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-base font-semibold">Add a deal</h2>
+        <code className={code + " mt-3 whitespace-pre"}>{`curl -X POST ${host}/api/v1/deals \\
+  -H "Authorization: Bearer $GLIDE_API_TOKEN" -H "Content-Type: application/json" \\
+  -d '{ "create": { "name": "Northwind Coffee", "brand": "Glued", "stage": "Call booked",
+    "value": 9000, "owner": "dan", "next_step": "Discovery call", "next_step_due": "2026-12-02",
+    "contact": { "person": "Maya Ortiz", "email": "maya@northwind.co" } } }'`}</code>
       </section>
 
       <section className="mt-8 rounded-xl border border-[#e6e8ef] p-5 text-sm">
