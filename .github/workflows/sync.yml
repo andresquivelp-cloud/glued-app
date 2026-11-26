@@ -1,0 +1,22 @@
+# Pulls Smartlead and Explee into the app: every hour from 8am to 6pm El Salvador time, and once at 11:50pm to close the day.
+# Needs the repo secret CRON_SECRET (same value as in Vercel). The repo is public, so the response is never printed.
+name: Sync sales data
+on:
+  schedule:
+    - cron: "0 14-23 * * *"   # 8am to 5pm El Salvador (UTC-6)
+    - cron: "0 0 * * *"       # 6pm El Salvador
+    - cron: "50 5 * * *"      # 11:50pm El Salvador
+  workflow_dispatch: {}
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Call the sync
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then echo "CRON_SECRET is not set in the repo secrets"; exit 1; fi
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 320 -H "Authorization: Bearer $CRON_SECRET" https://app.getglued.co/api/cron/sync)
+          echo "app answered $code"
+          [ "$code" = "200" ]
