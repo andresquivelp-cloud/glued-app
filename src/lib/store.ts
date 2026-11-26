@@ -18,6 +18,9 @@ export type Projection = { e: number | null; r: number | null };
 /* a positive reply from Smartlead or Explee, added to the Pipeline as a Cold deal for Daniel */
 export type Lead = { id: string; n: string; person: string; email: string; title?: string; company: string; domain?: string; b: 1 | 2; source: "Smartlead" | "Explee";
   campaign: string; reply: string; at: string; st: string; p: number; who: string; t: string; v: number; step: string; due: string; added: string };
+/* a booked call, sent by Grokbot (or any script). It counts on its booking day, for its channel; a canceled call does not count */
+export type Call = { id: string; at: string; booked_at: string; date: string; person: string; email: string; company: string; brand: "Glued" | "Digital Socios" | null;
+  channel: string; source: string; status: "booked" | "held" | "no_show" | "canceled"; deal: string | null; notes: string; added_at: string; by: string };
 export type Doc = {
   version: 1;
   days: Record<string, Partial<Record<Channel, DayChannel>>>;
@@ -26,6 +29,7 @@ export type Doc = {
   log: { at: string; who: string; what: string }[];
   leads: Lead[];
   leadsVersion?: number;
+  calls?: Call[];
   updated_at: string | null;
 };
 

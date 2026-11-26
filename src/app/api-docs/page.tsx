@@ -115,6 +115,32 @@ curl "${host}/api/v1/deals?name=Acme%20Co" -H "Authorization: Bearer $GLIDE_API_
     "contact": { "person": "Maya Ortiz", "email": "maya@northwind.co" } } }'`}</code>
       </section>
 
+      <section className="mt-8">
+        <h2 className="text-base font-semibold">Send booked calls</h2>
+        <code className={code + " mt-3 whitespace-pre"}>{`curl -X POST ${host}/api/v1/calls \\
+  -H "Authorization: Bearer $GLIDE_API_TOKEN" -H "Content-Type: application/json" \\
+  -d '{ "calls": [ { "at": "2026-11-27T15:00:00-06:00", "booked_at": "2026-11-25T10:12:00-06:00",
+    "person": "Maya Ortiz", "email": "maya@northwind.co", "company": "Northwind Coffee",
+    "brand": "Glued", "channel": "ScaledMail", "source": "Calendly" } ] }'`}</code>
+        <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-[#4a5070]">
+          <li>channel: ScaledMail, Mailin, Explee, MCC, Inbound, Referral or Other. status: booked (default), held, no_show or canceled.</li>
+          <li>A call counts on the day it was booked. Send the same id (or the same email and time) again to update it; canceled calls stop counting.</li>
+          <li>If the email (or deal name) matches a deal, the call goes in its History and a deal at Positive reply moves to Call booked.</li>
+          <li>Once calls are sent for a stretch of dates, they replace the Q4 files&apos; call totals for those dates in the app.</li>
+        </ul>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-base font-semibold">Check the data</h2>
+        <code className={code + " mt-3 whitespace-pre"}>{`curl "${host}/api/v1/metrics?from=2026-11-01&to=2026-11-25&brand=both" -H "Authorization: Bearer $GLIDE_API_TOKEN"
+curl "${host}/api/v1/data?parts=days,calls,costs" -H "Authorization: Bearer $GLIDE_API_TOKEN"`}</code>
+        <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-[#4a5070]">
+          <li>metrics: every number on Financials, Analytics and Forecast, worked out from what is stored.</li>
+          <li>data: the raw records. To fix something, use the matching POST: days, calls, deals, projections, costs or plan.</li>
+          <li>The full list of endpoints is at <a className="underline" href="/api/v1">/api/v1</a>.</li>
+        </ul>
+      </section>
+
       <section className="mt-8 rounded-xl border border-[#e6e8ef] p-5 text-sm">
         <h2 className="font-semibold">What&apos;s stored</h2>
         <p className="mt-2 text-[#4a5070]">{days.length ? `${days.length} days, ${days[0]} to ${days[days.length - 1]}.` : "Nothing yet."} {doc.updated_at ? `Last change ${new Date(doc.updated_at).toLocaleString("en-US", { timeZone: "America/El_Salvador", dateStyle: "medium", timeStyle: "short" })}.` : ""}</p>

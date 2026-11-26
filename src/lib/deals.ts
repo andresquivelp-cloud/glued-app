@@ -148,6 +148,11 @@ function apply(d: Base, s: Stored, ops: Op[], who: string) {
         todos(); const from = st(); if (from === to) break;
         s.st = to; if (to === "Won") s.p = 100; log(`moved this deal from ${from} to ${to}`); break;
       }
+      case "stage_if": {      // move only from the given stage (the calls API: Positive reply to Call booked)
+        const to = STAGES.find((x) => x === o.stage), from = st();
+        if (to && from === o.from) { todos(); s.st = to; log(`moved this deal from ${from} to ${to}`); }
+        break;
+      }
       case "set": {
         const f = FIELDS[String(o.field)]; if (!f) throw new OpError(`set: field must be value, probability, owner, next_step, next_step_due or note`);
         let v: unknown = o.value;
