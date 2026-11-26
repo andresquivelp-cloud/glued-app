@@ -266,7 +266,8 @@ export async function createDeal(b: Record<string, unknown>, who: string, by: st
     n: name, b: bn as 1 | 2, st, v: typeof b.value === "number" && b.value >= 0 ? Math.round(b.value) : 0, p: typeof b.probability === "number" && b.probability >= 0 && b.probability <= 100 ? Math.round(b.probability) : 20,
     who: owner, step: str(b.next_step, 200) || "Book a call", due: due ?? null, t: "Cold",
     person: str(c.person, 120) || undefined, title: str(c.title, 120) || undefined, email: str(c.email, 200) || undefined, company: str(c.company, 160) || name,
-    source: who === "grok" ? "Grokbot" : "Added by hand", added: new Date().toISOString(),
+    source: str(b.source, 40) || (who === "grok" ? "Grokbot" : "Added by hand"), campaign: str(b.campaign, 160) || undefined,
+    domain: str(c.website ?? b.website, 200).replace(/^https?:\/\//i, "").replace(/\/+$/, "") || undefined, added: new Date().toISOString(),
   };
   const s: Stored = { base, hist: [{ at: base.added!, who, what: `added this deal at ${st} for ${OWNERS[owner]}` }], updated_at: base.added, updated_by: by };
   stores[name] = s;
