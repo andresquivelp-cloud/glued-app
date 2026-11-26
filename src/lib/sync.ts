@@ -1,123 +1,259 @@
-import { type Doc, setDay, addLog, todayInSV, updateDoc } from "./store";
+import { type Doc, type BrandSplit, setDay, addLog, todayInSV, updateDoc } from "./store";
 
-// Refresh: pull Smartlead (ScaledMail inboxes) and Explee into the daily store.
-// Smartlead gives, per day: emails sent and positive replies, split Glued / Digital Socios by campaign name.
-// Today it also gives the inboxes: how many there are, and how many are burnt (warm-up health under 95%, or SMTP/IMAP failing).
-// Real capacity follows the team's rule: total capacity x healthy inboxes / all inboxes.
+// Refresh: pull Smartlead and Explee into the daily store.
+// Smartlead (ScaledMail and Mailin inboxes): emails sent, replies, bounces and positive replies per day, split Glued / Digital Socios
+// by campaign name; and today, the inboxes by channel (tag "Mailin" or not): count, Google / Outlook, burnt (warm-up under 95% or
+// SMTP/IMAP failing) and their daily sending limit. Every day is stored in El Salvador time.
+// Explee: emails sent per day (its usage report, UTC days, split by project = brand), positive replies per day (hot leads, by the
+// moment they turned hot) and replies per day (conversations, by their latest reply).
 
 const SL = process.env.SMARTLEAD_API_BASE || "https://server.smartlead.ai/api/v1";      // the override is for local tests
+const EX = process.env.EXPLEE_API_BASE || "https://api.explee.com/public/api/v1";
 const TZ = "America/El_Salvador";
-const FIRST_DAY = "2026-10-01";      // cold email restarted in October
+const FIRST_DAY = "2026-01-01";      // the first pull goes back to January; after that, the last 14 days each time
 const BURN_UNDER = 95;
 
-export type Report = { source: string; ok: boolean; msg: string };
+export type Report = { source: string; ok: boolean; msg: string; debug?: unknown };
 
 const num = (v: unknown) => { const n = typeof v === "string" ? Number(v.replace(/[%,\s]/g, "")) : typeof v === "number" ? v : NaN; return Number.isFinite(n) ? n : null; };
 const addDays = (d: string, n: number) => { const x = new Date(d + "T12:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 const fmt = (n: number) => n.toLocaleString("en-US");
+const svDay = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(new Date(iso));
+const MON = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const brandOf = (name: string) => (/\b(ds|digital\s*socios|socios)\b/i.test(name) ? "ds" : "glued");
+
+/* ---------------- Smartlead ---------------- */
 
 async function sl<T = unknown>(key: string, path: string, params: Record<string, string> = {}): Promise<T> {
   const qs = new URLSearchParams({ api_key: key, ...params });
-  const r = await fetch(`${SL}${path}?${qs}`, { cache: "no-store", signal: AbortSignal.timeout(25000) });
+  const r = await fetch(`${SL}${path}?${qs}`, { cache: "no-store", signal: AbortSignal.timeout(45000) });
   const text = await r.text();
-  if (!r.ok) throw new Error(`Smartlead ${path} said ${r.status}${text ? ": " + text.slice(0, 120) : ""}`);
+  if (!r.ok) throw new Error(`Smartlead ${path} said ${r.status}${text ? ": " + text.slice(0, 160) : ""}`);
   try { return JSON.parse(text) as T; } catch { throw new Error(`Smartlead ${path} did not send JSON`); }
 }
 
-const brandOf = (name: string) => (/\b(ds|digital\s*socios|socios)\b/i.test(name) ? "ds" : "glued");
+type SlDay = { date: string; m: Record<string, unknown> };
+// Smartlead answers { data: { day_wise_stats: [ { date: "18 Nov", day_name, email_engagement_metrics: { sent, replied, ... } } ] } }.
+// The date has no year, so it is read against the dates asked for.
+function slDays(j: unknown, from: string, to: string): SlDay[] {
+  const o = j as { data?: { day_wise_stats?: Record<string, unknown>[] } };
+  const rows = o?.data?.day_wise_stats ?? [];
+  const out: SlDay[] = [];
+  for (const r of rows) {
+    const raw = String(r.date ?? "").trim(); let iso: string | null = null;
+    if (/^\d{4}-\d{2}-\d{2}/.test(raw)) iso = raw.slice(0, 10);
+    else {
+      const m = /^(\d{1,2})\s+([A-Za-z]{3})/.exec(raw); if (!m) continue;
+      const mi = MON.indexOf(m[2].toLowerCase()); if (mi < 0) continue;
+      const dd = String(+m[1]).padStart(2, "0"), mm = String(mi + 1).padStart(2, "0");
+      for (let y = +from.slice(0, 4); y <= +to.slice(0, 4); y++) { const c = `${y}-${mm}-${dd}`; if (c >= from && c <= to) { iso = c; break; } }
+    }
+    if (iso) out.push({ date: iso, m: (r.email_engagement_metrics as Record<string, unknown>) ?? r });
+  }
+  return out;
+}
 
-type DayRow = Record<string, unknown> & { date?: string };
-const dayRows = (j: unknown): DayRow[] => {
-  const o = j as { data?: { day_wise_stats?: DayRow[] }; day_wise_stats?: DayRow[] };
-  return o?.data?.day_wise_stats ?? o?.day_wise_stats ?? (Array.isArray(j) ? (j as DayRow[]) : []);
-};
-// the count of positives, whatever the field is called on that endpoint
-const posOf = (r: DayRow) => { for (const k of ["positive_replied", "positive_reply", "positive_replies", "positive", "count"]) { const v = num(r[k]); if (v != null) return v; } return null; };
-
-async function smartlead(doc: Doc, key: string, today: string): Promise<Report> {
+async function smartlead(doc: Doc, key: string, today: string, full: boolean): Promise<Report> {
   const st = doc.sync.smartlead;
-  const from = st?.backfilled_from ? addDays(today, -14) : FIRST_DAY;      // the first pull goes back to October, then two weeks each time
+  const from = full || !st?.backfilled_from || st.backfilled_from > FIRST_DAY ? FIRST_DAY : addDays(today, -14);
   const range = { start_date: from, end_date: today, timezone: TZ };
 
-  // campaigns, to split sends by brand
   const camps = await sl<{ id: number; name: string }[]>(key, "/campaigns").catch(() => []);
   const ids = { glued: [] as number[], ds: [] as number[] };
   (Array.isArray(camps) ? camps : []).forEach((c) => ids[brandOf(c.name || "")].push(c.id));
+  const canSplit = ids.glued.length > 0 && ids.ds.length > 0;
 
-  const pull = async (path: string, campaignIds?: number[]) => dayRows(await sl(key, path, campaignIds ? { ...range, campaign_ids: campaignIds.join(",") } : range));
-  const split = ids.glued.length > 0 && ids.ds.length > 0;
-  const [all, g, d, pAll, pg, pd] = await Promise.all([
-    pull("/analytics/day-wise-overall-stats"),
-    split ? pull("/analytics/day-wise-overall-stats", ids.glued) : Promise.resolve([]),
-    split ? pull("/analytics/day-wise-overall-stats", ids.ds) : Promise.resolve([]),
-    pull("/analytics/day-wise-positive-reply-stats").catch(() => null),
-    split ? pull("/analytics/day-wise-positive-reply-stats", ids.glued).catch(() => null) : Promise.resolve(null),
-    split ? pull("/analytics/day-wise-positive-reply-stats", ids.ds).catch(() => null) : Promise.resolve(null),
-  ]);
-  const by = (rows: DayRow[] | null, f: (r: DayRow) => number | null) => new Map((rows ?? []).filter((r) => r.date).map((r) => [String(r.date).slice(0, 10), f(r)]));
-  const sent = by(all, (r) => num(r.sent)), sg = by(g, (r) => num(r.sent)), sd = by(d, (r) => num(r.sent));
-  const pos = by(pAll, posOf), ppg = by(pg, posOf), ppd = by(pd, posOf);
-
-  let days = 0, todaySent: number | null = null;
-  for (const [date, v] of sent) {
-    if (date < FIRST_DAY || date > today || v == null) continue;
-    const vals: Record<string, number> = { sent: v }; const p = pos.get(date); if (p != null) vals.positives = p;
-    const bs = split && sg.get(date) != null && sd.get(date) != null
-      ? { glued: { sent: sg.get(date)!, ...(ppg.get(date) != null ? { positives: ppg.get(date)! } : {}) }, ds: { sent: sd.get(date)!, ...(ppd.get(date) != null ? { positives: ppd.get(date)! } : {}) } }
-      : undefined;
-    setDay(doc, date, "ScaledMail", vals, "smartlead", bs);
-    days++; if (date === today) todaySent = v;
+  const pull = async (path: string, campaignIds?: number[]) => {
+    const j = await sl(key, path, campaignIds ? { ...range, campaign_ids: campaignIds.join(",") } : range);
+    return new Map(slDays(j, from, today).map((r) => [r.date, r.m]));
+  };
+  const [all, pAll] = await Promise.all([pull("/analytics/day-wise-overall-stats"), pull("/analytics/day-wise-positive-reply-stats")]);
+  const none = new Map<string, Record<string, unknown>>();
+  let g = none, d = none, pg = none, pd = none;
+  if (canSplit) {
+    [g, d, pg, pd] = await Promise.all([
+      pull("/analytics/day-wise-overall-stats", ids.glued).catch(() => none), pull("/analytics/day-wise-overall-stats", ids.ds).catch(() => none),
+      pull("/analytics/day-wise-positive-reply-stats", ids.glued).catch(() => none), pull("/analytics/day-wise-positive-reply-stats", ids.ds).catch(() => none),
+    ]);
+  }
+  // the brand split is kept only for days where Glued plus Digital Socios adds up to the total
+  let splitDays = 0, days = 0, todaySent: number | null = null;
+  const tot = { sent: 0, replies: 0, positives: 0 };
+  for (const [date, m] of all) {
+    if (date > today) continue;
+    const sent = num(m.sent), replies = num(m.replied), bounced = num(m.bounced), pos = num(pAll.get(date)?.positive_replied);
+    const vals: Record<string, number> = {};
+    if (sent != null) vals.sent = sent;
+    if (replies != null) vals.replies = replies;
+    if (bounced != null) vals.bounced = bounced;
+    if (pos != null) vals.positives = pos;
+    let split: BrandSplit | undefined;
+    const gm = g.get(date), dm = d.get(date), gs = num(gm?.sent), ds = num(dm?.sent);
+    if (gm && dm && sent != null && gs != null && ds != null && gs + ds === sent) {
+      const side = (x: Record<string, unknown>, p?: Record<string, unknown>) => {
+        const o: Record<string, number> = { sent: num(x.sent) ?? 0 };
+        const r = num(x.replied); if (r != null) o.replies = r;
+        const pp = num(p?.positive_replied); if (pp != null) o.positives = pp;
+        return o;
+      };
+      split = { glued: side(gm, pg.get(date)), ds: side(dm, pd.get(date)) }; splitDays++;
+    }
+    setDay(doc, date, "ScaledMail", vals, "smartlead", split);
+    days++; tot.sent += sent ?? 0; tot.replies += replies ?? 0; tot.positives += pos ?? 0;
+    if (date === today) todaySent = sent;
   }
 
-  // inboxes, today
-  let inboxes = 0, burnt = 0;
-  for (let offset = 0; offset < 5000; offset += 100) {
+  // inboxes, today: Mailin by its tag, everything else is ScaledMail
+  type Box = { n: number; burnt: number; google: number; outlook: number; other: number; limit: number };
+  const box = (): Box => ({ n: 0, burnt: 0, google: 0, outlook: 0, other: 0, limit: 0 });
+  const B = { ScaledMail: box(), Mailin: box() };
+  for (let offset = 0; offset < 20000; offset += 100) {
     const page = await sl<unknown>(key, "/email-accounts/", { offset: String(offset), limit: "100" });
     const list = (Array.isArray(page) ? page : (page as { data?: unknown[] })?.data ?? []) as Record<string, unknown>[];
     for (const a of list) {
-      inboxes++;
+      const tags = ((a.tags as { tag_name?: string }[]) ?? []).map((t) => String(t.tag_name ?? "").toLowerCase());
+      const b = tags.includes("mailin") ? B.Mailin : B.ScaledMail;
+      b.n++;
+      const type = String(a.type ?? "").toUpperCase();
+      if (type === "GMAIL" || type === "GOOGLE") b.google++; else if (type === "OUTLOOK" || type === "MICROSOFT") b.outlook++; else b.other++;
       const w = (a.warmup_details ?? {}) as Record<string, unknown>;
-      const rep = num(w.warmup_reputation ?? a.warmup_reputation ?? w.reputation_score);
-      const broken = a.is_smtp_success === false || a.is_imap_success === false;
-      if (broken || (rep != null && rep < BURN_UNDER)) burnt++;
+      const rep = num(w.warmup_reputation), broken = a.is_smtp_success === false || a.is_imap_success === false || w.status === "BLOCKED";
+      if (broken || (rep != null && rep < BURN_UNDER)) b.burnt++;
+      else b.limit += num(a.message_per_day) ?? 0;
     }
     if (list.length < 100) break;
   }
-  let capMsg = "";
-  if (inboxes > 0) {
-    const total = latest(doc, "ScaledMail", "total_capacity", today);
-    const vals: Record<string, number> = { inboxes, burnt_inboxes: burnt };
-    if (total != null) { vals.total_capacity = total; vals.real_capacity = Math.round((total * (inboxes - burnt)) / inboxes); }
-    setDay(doc, today, "ScaledMail", vals, "smartlead");
-    capMsg = `, ${fmt(burnt)} of ${fmt(inboxes)} inboxes burnt`;
+  for (const ch of ["ScaledMail", "Mailin"] as const) {
+    const b = B[ch]; if (!b.n) continue;
+    const vals: Record<string, number> = { inboxes: b.n, burnt_inboxes: b.burnt, inboxes_google: b.google, inboxes_outlook: b.outlook, inboxes_other: b.other, daily_limit: b.limit };
+    const total = latest(doc, ch, today);
+    if (total != null) vals.real_capacity = Math.round((total * (b.n - b.burnt)) / b.n);
+    setDay(doc, today, ch, vals, "smartlead");
   }
-  doc.sync.smartlead = { at: new Date().toISOString(), ok: true, msg: `${days} days`, backfilled_from: st?.backfilled_from ?? from };
-  return { source: "Smartlead", ok: true, msg: `Smartlead: ${todaySent != null ? fmt(todaySent) + " sent today" : "no sends yet today"}${capMsg}${split ? "" : " (no brand split: no campaign names with DS)"}` };
+  const kept = st?.backfilled_from && st.backfilled_from < from ? st.backfilled_from : from;
+  doc.sync.smartlead = { at: new Date().toISOString(), ok: true, msg: `${days} days from ${from}, ${splitDays} split by brand`, backfilled_from: kept };
+  return {
+    source: "Smartlead", ok: true,
+    msg: `Smartlead: ${todaySent != null ? fmt(todaySent) + " sent today" : "nothing sent yet today"}, ${fmt(B.ScaledMail.n + B.Mailin.n)} inboxes`,
+    debug: { from, days, splitDays, campaigns: { glued: ids.glued.length, ds: ids.ds.length }, totals: tot, inboxes: B },
+  };
 }
 
-function latest(doc: Doc, ch: "ScaledMail", f: "total_capacity", upto: string) {
-  for (const d of Object.keys(doc.days).filter((x) => x <= upto).sort().reverse()) { const v = doc.days[d]?.[ch]?.[f]; if (typeof v === "number") return v; }
+function latest(doc: Doc, ch: "ScaledMail" | "Mailin", upto: string) {
+  for (const d of Object.keys(doc.days).filter((x) => x <= upto).sort().reverse()) { const v = doc.days[d]?.[ch]?.total_capacity; if (typeof v === "number") return v; }
   return null;
 }
 
-// Explee's public API covers company and people search. It has no sending numbers to pull,
-// so Explee is filled by Grokbot or by Update numbers until Explee adds them.
-async function explee(): Promise<Report> {
-  if (!process.env.EXPLEE_API_KEY) return { source: "Explee", ok: false, msg: "Explee: not connected (no API key)" };
-  return { source: "Explee", ok: false, msg: "Explee: its API has no sending numbers, so Grokbot fills them" };
+/* ---------------- Explee ---------------- */
+
+async function ex<T = unknown>(key: string, path: string, params: Record<string, string> = {}): Promise<T> {
+  const qs = new URLSearchParams(params).toString();
+  const r = await fetch(`${EX}${path}${qs ? "?" + qs : ""}`, { headers: { "X-API-Key": key, accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(45000) });
+  const text = await r.text();
+  if (!r.ok) throw new Error(`Explee ${path} said ${r.status}${text ? ": " + text.slice(0, 160) : ""}`);
+  try { return JSON.parse(text) as T; } catch { throw new Error(`Explee ${path} did not send JSON`); }
+}
+const listOf = (j: unknown, ...keys: string[]): Record<string, unknown>[] => {
+  if (Array.isArray(j)) return j as Record<string, unknown>[];
+  const o = j as Record<string, unknown>;
+  for (const k of keys) if (Array.isArray(o?.[k])) return o[k] as Record<string, unknown>[];
+  return [];
+};
+
+type Tally = { sent: number; replies: number; positives: number };
+async function explee(doc: Doc, key: string, today: string): Promise<Report> {
+  const dbg: Record<string, unknown> = {};
+  // projects: one per brand, named by its domain
+  const projects = listOf(await ex(key, "/autogtm/projects"), "projects", "items", "data");
+  const projBrand = new Map<string, "glued" | "ds">();
+  for (const p of projects) projBrand.set(String(p.id ?? p.project_id), brandOf(`${p.domain ?? ""} ${p.name ?? ""}`));
+  dbg.projects = projects.map((p) => ({ id: p.id ?? p.project_id, name: p.name ?? p.domain, keys: Object.keys(p).slice(0, 12) }));
+  const campBrand = new Map<string, "glued" | "ds">();
+  try {
+    const camps = listOf(await ex(key, "/autogtm/campaigns", { include_archived: "true" }), "campaigns", "items", "data");
+    for (const c of camps) campBrand.set(String(c.id ?? c.campaign_id), projBrand.get(String(c.project_id ?? "")) ?? brandOf(String(c.name ?? "")));
+    dbg.campaigns = camps.length;
+  } catch (e) { dbg.campaigns = (e as Error).message; }
+
+  type Flow = Tally & { g: Tally; d: Tally; has: Set<string> };
+  const days = new Map<string, Flow>();
+  const zero = (): Tally => ({ sent: 0, replies: 0, positives: 0 });
+  const day = (d: string) => { let f = days.get(d); if (!f) days.set(d, (f = { ...zero(), g: zero(), d: zero(), has: new Set() })); return f; };
+
+  // 1. emails sent per day, last 90 days, by project
+  const usage = await ex<Record<string, unknown>>(key, "/autogtm/billing/usage", { days: "90" });
+  for (const u of listOf(usage, "days")) {
+    const date = String(u.date ?? "").slice(0, 10); if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today) continue;
+    const f = day(date); f.has.add("sent"); f.sent += num(u.emails_sent) ?? 0;
+    for (const p of (u.projects as Record<string, unknown>[]) ?? []) { const b = projBrand.get(String(p.project_id)) ?? brandOf(String(p.name ?? "")); f[b === "ds" ? "d" : "g"].sent += num(p.emails_sent) ?? 0; }
+  }
+  dbg.usage_total = usage.total_emails_sent;
+  // 2. positive replies per day: hot leads, by when they turned hot
+  let hot = 0;
+  for (let offset = 0, guard = 0; guard < 100; guard++) {
+    const j = await ex<Record<string, unknown>>(key, "/autogtm/hot-leads", { limit: "200", offset: String(offset) });
+    const leads = listOf(j, "leads", "items");
+    for (const l of leads) {
+      const at = String(l.became_hot_at ?? l.replied_at ?? ""); if (!at) continue;
+      const date = svDay(at); if (date > today) continue;
+      const f = day(date); f.has.add("positives"); f.positives++; hot++;
+      f[campBrand.get(String(l.campaign_id)) === "ds" ? "d" : "g"].positives++;
+    }
+    if (!j.has_more || !leads.length) break;
+    offset = num(j.next_offset) ?? offset + leads.length;
+  }
+  // 3. replies per day: each conversation counted once, on the day of its latest reply
+  const seen = new Set<string>(); let convs = 0;
+  for (const p of projects) {
+    const pid = String(p.id ?? p.project_id), b = projBrand.get(pid) ?? "glued";
+    for (const tab of ["need_reply", "replied", "sent"]) {
+      for (let offset = 0, guard = 0; guard < (tab === "sent" ? 25 : 100); guard++) {
+        let j: Record<string, unknown>;
+        try { j = await ex(key, `/autogtm/projects/${pid}/inbox`, { tab, limit: "200", offset: String(offset) }); }
+        catch (e) { dbg["inbox_" + tab] = (e as Error).message; break; }
+        const cs = listOf(j, "contacts", "items");
+        for (const c of cs) {
+          const id = `${c.campaign_id}:${c.person_id ?? c.email}`, at = c.latest_reply_at as string | null;
+          if (seen.has(id) || !at || !(num(c.reply_count) ?? 0)) continue;
+          seen.add(id); const date = svDay(at); if (date > today) continue;
+          const f = day(date); f.has.add("replies"); f.replies++; f[b === "ds" ? "d" : "g"].replies++; convs++;
+        }
+        if (!j.has_more || !cs.length) break;
+        offset = num(j.next_offset) ?? offset + cs.length;
+      }
+    }
+  }
+  let n = 0, todaySent: number | null = null;
+  for (const [date, f] of days) {
+    const vals: Record<string, number> = {};
+    for (const k of ["sent", "replies", "positives"] as const) if (f.has.has(k)) vals[k] = f[k];
+    setDay(doc, date, "Explee", vals, "explee", { glued: f.g, ds: f.d });
+    n++; if (date === today) todaySent = f.sent;
+  }
+  doc.sync.explee = { at: new Date().toISOString(), ok: true, msg: `${n} days, ${hot} hot leads, ${convs} conversations with replies` };
+  Object.assign(dbg, { days: n, hot, conversations: convs });
+  return { source: "Explee", ok: true, msg: `Explee: ${todaySent != null ? fmt(todaySent) + " sent today" : "nothing sent yet today"}, ${hot} hot leads in all`, debug: dbg };
 }
 
-export async function runSync(who: string): Promise<{ doc: Doc; report: Report[] }> {
+/* ---------------- run ---------------- */
+
+export async function runSync(who: string, opts: { full?: boolean } = {}): Promise<{ doc: Doc; report: Report[] }> {
   const today = todayInSV(), report: Report[] = [];
   const doc = await updateDoc(async (doc) => {
     report.length = 0;
-    const key = process.env.SMARTLEAD_API_KEY;
-    if (!key) report.push({ source: "Smartlead", ok: false, msg: "Smartlead: not connected (no API key)" });
-    else {
-      try { report.push(await smartlead(doc, key, today)); }
-      catch (e) { const msg = (e as Error).message.replace(key, "***"); doc.sync.smartlead = { ...(doc.sync.smartlead ?? {}), at: new Date().toISOString(), ok: false, msg }; report.push({ source: "Smartlead", ok: false, msg: "Smartlead failed: " + msg }); }
+    const tasks: [string, string | undefined, (k: string) => Promise<Report>][] = [
+      ["Smartlead", process.env.SMARTLEAD_API_KEY, (k) => smartlead(doc, k, today, !!opts.full)],
+      ["Explee", process.env.EXPLEE_API_KEY, (k) => explee(doc, k, today)],
+    ];
+    for (const [name, key, run] of tasks) {
+      if (!key) { report.push({ source: name, ok: false, msg: `${name}: not connected (no API key)` }); continue; }
+      try { report.push(await run(key)); }
+      catch (e) {
+        const msg = (e as Error).message.split(key).join("***"), k = name.toLowerCase();
+        doc.sync[k] = { ...(doc.sync[k] ?? {}), at: new Date().toISOString(), ok: false, msg };
+        report.push({ source: name, ok: false, msg: `${name} failed: ${msg}` });
+      }
     }
-    report.push(await explee());
     addLog(doc, who, "refresh: " + report.map((r) => r.msg).join(" · "));
   });
   return { doc, report };

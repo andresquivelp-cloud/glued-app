@@ -1,7 +1,7 @@
 import { runSync } from "@/lib/sync";
 import { json, personOr401 } from "@/lib/api";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // The refresh button: pull Smartlead and Explee for today (and any days missed).
 export async function POST() {

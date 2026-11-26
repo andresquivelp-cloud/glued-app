@@ -7,8 +7,8 @@ import path from "node:path";
 
 export const CHANNELS = ["ScaledMail", "Mailin", "Explee", "MCC"] as const;
 export type Channel = (typeof CHANNELS)[number];
-export const FLOW = ["sent", "positives", "calls"] as const;            // what happened that day
-export const STATE = ["real_capacity", "total_capacity", "burnt_inboxes", "ratio", "inboxes"] as const;  // how things stood that day
+export const FLOW = ["sent", "replies", "positives", "calls", "bounced"] as const;            // what happened that day
+export const STATE = ["real_capacity", "total_capacity", "burnt_inboxes", "ratio", "inboxes", "inboxes_google", "inboxes_outlook", "inboxes_other", "daily_limit"] as const;  // how things stood that day
 export const FIELDS = [...FLOW, ...STATE] as const;
 export type Field = (typeof FIELDS)[number];
 
