@@ -26,7 +26,7 @@ export async function GET() {
     deal_ops: {
       stage: '{ op: "stage", stage: "Call booked" }  Stages: Positive reply, Call booked, Proposal, Final approval, Won',
       board_column: '{ op: "set", field: "board_column", value: "Prepping assets" }  Board-only columns while the stage is Positive reply: Positive reply, Prepping assets, Assets ready, In follow-ups. Moving the stage on clears it',
-      contact: '{ op: "set", field: "person" | "title" | "company" | "email" | "brand", value }',
+      contact: '{ op: "set", field: "person" | "title" | "company" | "email" | "website" | "brand", value }',
       thread_add: '{ op: "thread_add", at, direction: "in" | "out", source: "gmail", from?, to?, subject?, body }  an email outside Smartlead (the conversation moved to Gmail, say). Smartlead threads come in by themselves',
       set: '{ op: "set", field, value }  field: value (dollars, the whole signed contract: a retainer is the monthly fee times the months), probability (0-100), owner (andres, david, dan), next_step, next_step_due (2026-12-01 or null), note (replaces the notes)',
       note_append: '{ op: "note_append", text }  adds to the end of the notes, for call summaries',

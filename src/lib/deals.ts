@@ -33,7 +33,7 @@ export type Hist = { at: string; who?: string; what: string };
 export type Stored = {
   base?: Base;                                       // only for deals added in the app or by Grokbot
   st?: string; p?: number; v?: number; who?: string; step?: string; due?: string | null; lane?: string | null; b?: 1 | 2;
-  person?: string; title?: string; company?: string; email?: string; thread?: Msg[];
+  person?: string; title?: string; company?: string; email?: string; website?: string; thread?: Msg[];
   money?: 0 | 1; want?: 0 | 1; like?: 0 | 1; note?: string;
   todos?: Todo[]; links?: Link[]; comments?: Comment[]; hist?: Hist[]; updated_at?: string; updated_by?: string;
 };
@@ -111,7 +111,7 @@ export function view(d: Base, s0: Stored | undefined) {
     name: d.n, brand: b === 1 ? "Glued" : "Digital Socios", stage: st, board_column: st === "Positive reply" ? (s.lane ?? "Positive reply") : st, value: v, probability: p, weighted: Math.round((v * p) / 100),
     owner: who, owner_name: OWNERS[who] ?? who, next_step: s.step ?? d.step ?? "", next_step_due: s.due !== undefined ? s.due : d.due ?? null,
     temperature: n === 3 ? "Hot" : n === 2 ? "Warm" : "Cold", checks: { has_money: !!ck.money, wants_project: !!ck.want, likes_us: !!ck.like },
-    contact: { person: s.person ?? d.person ?? null, title: s.title ?? d.title ?? null, email: s.email ?? d.email ?? null, company: s.company ?? d.company ?? null },
+    contact: { person: s.person ?? d.person ?? null, title: s.title ?? d.title ?? null, email: s.email ?? d.email ?? null, company: s.company ?? d.company ?? null, website: s.website ?? d.domain ?? null },
     source: d.source ?? null, campaign: d.campaign ?? null, their_reply: d.reply ?? null, replied_at: d.at ?? null, added_at: d.added ?? null,
     note: s.note ?? "",
     todos: (s.todos ?? seedTodos(d, st)).map((x) => ({ id: x.id, text: x.t, done: !!x.done, owner: x.who ?? null, due: x.due ?? null })),
@@ -131,7 +131,7 @@ const day = (v: unknown) => (v == null || v === "" ? null : typeof v === "string
 const okUrl = (u: unknown) => { if (typeof u !== "string") return null; let x = u.trim(); if (!/^https?:\/\//i.test(x)) x = "https://" + x; try { const r = new URL(x); return /^https?:$/.test(r.protocol) && r.hostname.includes(".") ? r.toString().slice(0, 2000) : null; } catch { return null; } };
 const newId = (p: string) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const FIELDS: Record<string, keyof Stored> = { value: "v", probability: "p", owner: "who", next_step: "step", next_step_due: "due", note: "note", v: "v", p: "p", who: "who", step: "step", due: "due",
-  board_column: "lane", lane: "lane", brand: "b", b: "b", person: "person", contact_name: "person", title: "title", company: "company", email: "email" };
+  board_column: "lane", lane: "lane", brand: "b", b: "b", person: "person", contact_name: "person", title: "title", company: "company", email: "email", website: "website" };
 const CHECK_KEYS: Record<string, Check> = { money: "money", has_money: "money", want: "want", wants_project: "want", like: "like", likes_us: "like" };
 const CHECK_NAME: Record<Check, string> = { money: "Has the money", want: "Wants the project", like: "Likes us" };
 
@@ -173,10 +173,11 @@ function apply(d: Base, s: Stored, ops: Op[], who: string) {
           if (v && st() !== "Positive reply") { const from = st(); s.st = "Positive reply"; log(`moved this deal from ${from} to Positive reply`); } }
         if (f === "b") { const x = String(v).toLowerCase(); v = x === "1" || x.startsWith("g") ? 1 : x === "2" || x.startsWith("d") ? 2 : 0; if (!v) throw new OpError('brand must be "Glued" or "Digital Socios"'); }
         if (f === "person" || f === "title" || f === "company") v = str(v, 160);
+        if (f === "website") { v = str(v, 200).replace(/^https?:\/\//i, "").replace(/\/+$/, ""); if (v && !/^[^\s/]+\.[^\s]+$/.test(v as string)) throw new OpError("website must look like acme.com"); }
         if (f === "email") { v = str(v, 200).toLowerCase(); if (v && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v as string)) throw new OpError("email must look like name@company.com"); }
         const before = (s as Record<string, unknown>)[f] ?? (d as Record<string, unknown>)[f];
         (s as Record<string, unknown>)[f] = v;
-        const LBL: Record<string, string> = { v: "the deal value", p: "the chance", who: "the owner", step: "the next step", due: "the next step date", lane: "the board column", b: "the brand", person: "the contact name", title: "the contact's title", company: "the company", email: "the contact email" };
+        const LBL: Record<string, string> = { v: "the deal value", p: "the chance", who: "the owner", step: "the next step", due: "the next step date", lane: "the board column", b: "the brand", person: "the contact name", title: "the contact's title", company: "the company", email: "the contact email", website: "the website" };
         const shown = f === "who" ? OWNERS[v as string] : f === "v" ? "$" + (v as number).toLocaleString("en-US") : f === "p" ? v + "%" : f === "b" ? (v === 1 ? "Glued" : "Digital Socios") : f === "lane" ? (v ?? "Positive reply") : v || (f === "due" ? "no date" : "blank");
         if (f !== "note" && before !== v) log(`changed ${LBL[f] ?? String(o.field).replace(/_/g, " ")} to ${shown}`);
         if (f === "note" && who === "grok") log("updated the notes");
