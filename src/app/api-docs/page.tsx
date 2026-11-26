@@ -95,12 +95,16 @@ curl "${host}/api/v1/deals?name=Acme%20Co" -H "Authorization: Bearer $GLIDE_API_
     { "op": "todo_add", "text": "Send the contract", "due": "2026-11-27", "owner": "andres" },
     { "op": "todo_done", "text": "Book a call" },
     { "op": "link_add", "url": "https://drive.google.com/...", "name": "Acme one-pager" },
-    { "op": "set", "field": "value", "value": 14000 }
+    { "op": "set", "field": "value", "value": 14000 },
+    { "op": "set", "field": "board_column", "value": "In follow-ups" },
+    { "op": "thread_add", "at": "2026-11-26T15:04:00Z", "direction": "in", "source": "gmail", "from": "sam@acme.co", "subject": "Re: one-pager", "body": "Looks good, Tuesday works." }
   ] }'`}</code>
         <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-[#4a5070]">
           <li>Stages: Positive reply, Call booked, Proposal, Final approval, Won. Won sets the chance to 100%.</li>
           <li>Checks: has_money, wants_project, likes_us. 3 of 3 is Hot, 2 is Warm, 1 or none is Cold.</li>
-          <li>set fields: value, probability, owner (andres, david, dan), next_step, next_step_due, note.</li>
+          <li>set fields: value, probability, owner (andres, david, dan), next_step, next_step_due, note, brand (Glued or Digital Socios), person, title, company, email.</li>
+          <li>board_column: Positive reply, Prepping assets, Assets ready, In follow-ups. These are board-only columns while the stage is Positive reply; moving the stage on clears it.</li>
+          <li>thread_add: an email from outside Smartlead, such as Gmail once the talk moves there. direction is &quot;in&quot; (from them) or &quot;out&quot; (from us). Smartlead emails come in with each sync by themselves. Sending the same message twice is ignored.</li>
           <li>Up to 50 changes a call. They apply in order; if one is wrong, none are saved and the error says which.</li>
           <li>Every change shows in the deal&apos;s History as Grokbot.</li>
         </ul>

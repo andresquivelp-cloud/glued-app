@@ -14,6 +14,8 @@ const LOCAL = path.join(process.cwd(), ".data", "deals.json");
 const blobOn = () => !!process.env.BLOB_READ_WRITE_TOKEN;
 
 export const STAGES = ["Positive reply", "Call booked", "Proposal", "Final approval", "Won"] as const;
+// Nov 26: board-only columns between Positive reply and Call booked. The deal's stage stays Positive reply while it sits in one
+export const LANES = ["Prepping assets", "Assets ready", "In follow-ups"] as const;
 export const OWNERS: Record<string, string> = { andres: "Andrés", david: "David Arrué", dan: "Daniel", grok: "Grokbot" };
 const CHECKS = ["money", "want", "like"] as const;
 type Check = (typeof CHECKS)[number];
@@ -21,14 +23,17 @@ type Check = (typeof CHECKS)[number];
 export type Base = {
   n: string; b: 1 | 2; st: string; v: number; p: number; who: string; step: string; due: string | null; t?: string;
   person?: string; email?: string; title?: string; company?: string; domain?: string; source?: string; campaign?: string; reply?: string; at?: string; added?: string; id?: string;
+  thread?: Msg[];
 };
+export type Msg = { id?: string; at: string; dir: "in" | "out"; subject?: string; body: string; src: string; from?: string; to?: string };
 export type Todo = { id: string; t: string; done: 0 | 1; who?: string; due?: string | null };
 export type Link = { id: string; u: string; n?: string; at: string; who?: string };
 export type Comment = { id: string; who: string; at: string; t: string };
 export type Hist = { at: string; who?: string; what: string };
 export type Stored = {
   base?: Base;                                       // only for deals added in the app or by Grokbot
-  st?: string; p?: number; v?: number; who?: string; step?: string; due?: string | null;
+  st?: string; p?: number; v?: number; who?: string; step?: string; due?: string | null; lane?: string | null; b?: 1 | 2;
+  person?: string; title?: string; company?: string; email?: string; thread?: Msg[];
   money?: 0 | 1; want?: 0 | 1; like?: 0 | 1; note?: string;
   todos?: Todo[]; links?: Link[]; comments?: Comment[]; hist?: Hist[]; updated_at?: string; updated_by?: string;
 };
@@ -100,17 +105,18 @@ function normalize(s: Stored) {
 
 /* ---------- what the API shows for one deal */
 export function view(d: Base, s0: Stored | undefined) {
-  const s = normalize(structuredClone(s0 ?? {})), st = s.st ?? d.st, ck = checksOf(d, s), n = CHECKS.filter((k) => ck[k]).length;
+  const s = normalize(structuredClone(s0 ?? {})), st = s.st ?? d.st, ck = checksOf(d, s), n = CHECKS.filter((k) => ck[k]).length, b = s.b ?? d.b;
   const v = s.v ?? d.v, p = s.p ?? d.p, who = s.who ?? d.who;
   return {
-    name: d.n, brand: d.b === 1 ? "Glued" : "Digital Socios", stage: st, value: v, probability: p, weighted: Math.round((v * p) / 100),
+    name: d.n, brand: b === 1 ? "Glued" : "Digital Socios", stage: st, board_column: st === "Positive reply" ? (s.lane ?? "Positive reply") : st, value: v, probability: p, weighted: Math.round((v * p) / 100),
     owner: who, owner_name: OWNERS[who] ?? who, next_step: s.step ?? d.step ?? "", next_step_due: s.due !== undefined ? s.due : d.due ?? null,
     temperature: n === 3 ? "Hot" : n === 2 ? "Warm" : "Cold", checks: { has_money: !!ck.money, wants_project: !!ck.want, likes_us: !!ck.like },
-    contact: { person: d.person ?? null, title: d.title ?? null, email: d.email ?? null, company: d.company ?? null },
+    contact: { person: s.person ?? d.person ?? null, title: s.title ?? d.title ?? null, email: s.email ?? d.email ?? null, company: s.company ?? d.company ?? null },
     source: d.source ?? null, campaign: d.campaign ?? null, their_reply: d.reply ?? null, replied_at: d.at ?? null, added_at: d.added ?? null,
     note: s.note ?? "",
     todos: (s.todos ?? seedTodos(d, st)).map((x) => ({ id: x.id, text: x.t, done: !!x.done, owner: x.who ?? null, due: x.due ?? null })),
     links: (s.links ?? []).map((x) => ({ id: x.id, url: x.u, name: x.n ?? "", added_at: x.at, added_by: x.who ?? null })),
+    thread: [...(d.thread ?? []), ...(s.thread ?? [])].sort((x, y) => x.at.localeCompare(y.at)).map((m) => ({ id: m.id ?? null, at: m.at, direction: m.dir === "in" ? "from them" : "from us", source: m.src, from: m.from ?? null, to: m.to ?? null, subject: m.subject ?? "", body: m.body })),
     comments: (s.comments ?? []).map((x) => ({ id: x.id, by: x.who, at: x.at, text: x.t })),
     history: (s.hist ?? seedHist(d, st)).slice().reverse().sort((a, b) => String(b.at).localeCompare(String(a.at))).map((x) => ({ at: x.at, by: x.who || "sync", what: x.what })),
     updated_at: s.updated_at ?? null, updated_by: s.updated_by ?? null,
@@ -124,7 +130,8 @@ const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice
 const day = (v: unknown) => (v == null || v === "" ? null : typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined);
 const okUrl = (u: unknown) => { if (typeof u !== "string") return null; let x = u.trim(); if (!/^https?:\/\//i.test(x)) x = "https://" + x; try { const r = new URL(x); return /^https?:$/.test(r.protocol) && r.hostname.includes(".") ? r.toString().slice(0, 2000) : null; } catch { return null; } };
 const newId = (p: string) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-const FIELDS: Record<string, keyof Stored> = { value: "v", probability: "p", owner: "who", next_step: "step", next_step_due: "due", note: "note", v: "v", p: "p", who: "who", step: "step", due: "due" };
+const FIELDS: Record<string, keyof Stored> = { value: "v", probability: "p", owner: "who", next_step: "step", next_step_due: "due", note: "note", v: "v", p: "p", who: "who", step: "step", due: "due",
+  board_column: "lane", lane: "lane", brand: "b", b: "b", person: "person", contact_name: "person", title: "title", company: "company", email: "email" };
 const CHECK_KEYS: Record<string, Check> = { money: "money", has_money: "money", want: "want", wants_project: "want", like: "like", likes_us: "like" };
 const CHECK_NAME: Record<Check, string> = { money: "Has the money", want: "Wants the project", like: "Likes us" };
 
@@ -146,7 +153,7 @@ function apply(d: Base, s: Stored, ops: Op[], who: string) {
         const to = STAGES.find((x) => x.toLowerCase() === String(o.stage ?? o.value ?? "").trim().toLowerCase());
         if (!to) throw new OpError(`stage must be one of: ${STAGES.join(", ")}`);
         todos(); const from = st(); if (from === to) break;
-        s.st = to; if (to === "Won") s.p = 100; log(`moved this deal from ${from} to ${to}`); break;
+        s.st = to; if (to === "Won") s.p = 100; if (to !== "Positive reply") s.lane = null; log(`moved this deal from ${from} to ${to}`); break;
       }
       case "stage_if": {      // move only from the given stage (the calls API: Positive reply to Call booked)
         const to = STAGES.find((x) => x === o.stage), from = st();
@@ -162,9 +169,16 @@ function apply(d: Base, s: Stored, ops: Op[], who: string) {
         if (f === "step") v = str(v, 200);
         if (f === "note") v = typeof v === "string" ? v.slice(0, 20000) : "";
         if (f === "due") { v = day(v); if (v === undefined) throw new OpError("next_step_due must look like 2026-12-01, or null"); }
+        if (f === "lane") { if (v === null || v === "" || v === "Positive reply") v = null; else if (!(LANES as readonly string[]).includes(String(v))) throw new OpError(`board_column must be Positive reply, ${LANES.join(", ")}`);
+          if (v && st() !== "Positive reply") { const from = st(); s.st = "Positive reply"; log(`moved this deal from ${from} to Positive reply`); } }
+        if (f === "b") { const x = String(v).toLowerCase(); v = x === "1" || x.startsWith("g") ? 1 : x === "2" || x.startsWith("d") ? 2 : 0; if (!v) throw new OpError('brand must be "Glued" or "Digital Socios"'); }
+        if (f === "person" || f === "title" || f === "company") v = str(v, 160);
+        if (f === "email") { v = str(v, 200).toLowerCase(); if (v && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v as string)) throw new OpError("email must look like name@company.com"); }
         const before = (s as Record<string, unknown>)[f] ?? (d as Record<string, unknown>)[f];
         (s as Record<string, unknown>)[f] = v;
-        if (f !== "note" && before !== v) log(`changed ${String(o.field).replace(/_/g, " ")} to ${f === "who" ? OWNERS[v as string] : f === "v" ? "$" + (v as number).toLocaleString("en-US") : f === "p" ? v + "%" : v ?? "no date"}`);
+        const LBL: Record<string, string> = { v: "the deal value", p: "the chance", who: "the owner", step: "the next step", due: "the next step date", lane: "the board column", b: "the brand", person: "the contact name", title: "the contact's title", company: "the company", email: "the contact email" };
+        const shown = f === "who" ? OWNERS[v as string] : f === "v" ? "$" + (v as number).toLocaleString("en-US") : f === "p" ? v + "%" : f === "b" ? (v === 1 ? "Glued" : "Digital Socios") : f === "lane" ? (v ?? "Positive reply") : v || (f === "due" ? "no date" : "blank");
+        if (f !== "note" && before !== v) log(`changed ${LBL[f] ?? String(o.field).replace(/_/g, " ")} to ${shown}`);
         if (f === "note" && who === "grok") log("updated the notes");
         break;
       }
@@ -177,7 +191,7 @@ function apply(d: Base, s: Stored, ops: Op[], who: string) {
         const ck = checksOf(d, s), was = CHECKS.filter((x) => ck[x]).length, on = o.on === undefined ? 1 : o.on ? 1 : 0;
         CHECKS.forEach((x) => (s[x] = ck[x])); if (s[k] === on) break; s[k] = on as 0 | 1;
         const now2 = CHECKS.filter((x) => s[x]).length, t = (n: number) => (n === 3 ? "Hot" : n === 2 ? "Warm" : "Cold");
-        log(`${on ? "confirmed" : "unchecked"} "${CHECK_NAME[k]}"${t(was) !== t(now2) ? `, now ${t(now2)}` : ""}`); break;
+        log(`${on ? "marked" : "unmarked"} "${CHECK_NAME[k]}"${t(was) !== t(now2) ? `, now ${t(now2)}` : ""}`); break;
       }
       case "todo_add": {
         const t = str(o.text, 500); if (!t) throw new OpError("todo_add: text is empty");
@@ -196,13 +210,24 @@ function apply(d: Base, s: Stored, ops: Op[], who: string) {
         log(`attached ${n ? `"${n}"` : new URL(u).hostname.replace(/^www\./, "")}`); break;
       }
       case "link_remove": { const a = (s.links ??= []), i = find(a, o, (x) => x.u), x = a.splice(i, 1)[0]; log(`removed the link ${x.n ? `"${x.n}"` : new URL(x.u).hostname}`); break; }
+      case "thread_add": {      // a message from outside Smartlead (Gmail, for example) or one Smartlead did not send us
+        const body = typeof o.body === "string" ? o.body.trim().slice(0, 4000) : ""; if (!body) throw new OpError("thread_add: body is empty");
+        const at = typeof o.at === "string" && !Number.isNaN(Date.parse(o.at)) ? new Date(o.at).toISOString() : null; if (!at) throw new OpError("thread_add: at must be the message's date and time");
+        const dir = /^(in|from them|received)$/i.test(String(o.direction ?? o.dir ?? "")) ? "in" : /^(out|from us|sent)$/i.test(String(o.direction ?? o.dir ?? "")) ? "out" : null;
+        if (!dir) throw new OpError('thread_add: direction must be "in" (from them) or "out" (from us)');
+        const id = idOk(o.id) ? (o.id as string) : "m" + at.replace(/\D/g, "").slice(0, 14) + dir;
+        const arr = (s.thread ??= []); if (arr.some((m) => m.id === id)) break;
+        arr.push({ id, at, dir, subject: str(o.subject, 200), body, src: str(o.source, 30).toLowerCase() || "gmail", from: str(o.from, 200) || undefined, to: str(o.to, 200) || undefined });
+        arr.sort((x, y) => x.at.localeCompare(y.at)); s.thread = arr.slice(-200); break;
+      }
+      case "thread_remove": { const a = (s.thread ??= []), i = a.findIndex((m) => m.id === o.id); if (i < 0) throw new OpError("thread_remove: no message with that id"); a.splice(i, 1); break; }
       case "comment_add": {
         const t = typeof o.text === "string" ? o.text.trim().slice(0, 10000) : ""; if (!t) throw new OpError("comment_add: text is empty");
         const id = idOk(o.id) ? (o.id as string) : newId("c"); if ((s.comments ??= []).some((x) => x.id === id)) break;
         s.comments.unshift({ id, who, at: now(), t }); log("commented"); break;
       }
       case "comment_remove": { const a = (s.comments ??= []), i = find(a, o, (x) => x.t); a.splice(i, 1); log("removed a comment"); break; }
-      default: throw new OpError(`unknown op "${o.op}". Use: stage, set, note_append, check, todo_add, todo_done, todo_remove, link_add, link_remove, comment_add, comment_remove`);
+      default: throw new OpError(`unknown op "${o.op}". Use: stage, set, note_append, check, todo_add, todo_done, todo_remove, link_add, link_remove, comment_add, comment_remove, thread_add, thread_remove`);
     }
   }
   s.hist = (s.hist ?? []).slice(-500); s.comments = s.comments?.slice(0, 500); s.todos = s.todos?.slice(-200); s.links = s.links?.slice(-100);

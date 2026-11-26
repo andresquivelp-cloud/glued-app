@@ -280,7 +280,11 @@ async function slPositives(key: string, since: string, dbg: Record<string, unkno
       const hist = histOf(m), inbound = hist.filter((x) => /reply|received|inbound/i.test(String(x.type ?? x.direction ?? x.message_type ?? ""))), lastIn = inbound[inbound.length - 1] ?? {};
       out.push({ id: "sl:" + String(m.email_lead_map_id ?? m.campaign_lead_map_id ?? m.email_lead_id ?? email), person: `${first} ${lastN}`.trim(), email,
         company: String(m.lead_company ?? m.company_name ?? lead.company ?? lead.company_name ?? ""), domain: email.split("@")[1], b: brandOf(cname) === "ds" ? 2 : 1, source: "Smartlead", campaign: cname,
-        reply: clip(lastIn.email_body ?? lastIn.body ?? lastIn.text ?? last.body ?? ""), at: new Date(at).toISOString() });
+        reply: clip(lastIn.email_body ?? lastIn.body ?? lastIn.text ?? last.body ?? ""), at: new Date(at).toISOString(),
+        /* Nov 26: the whole email thread (what we sent, what they answered), newest 12 messages, each cut to 1,500 characters */
+        thread: hist.slice(-12).map((x) => { const t = String(x.time ?? x.sent_time ?? x.created_at ?? x.received_at ?? ""), ty = String(x.type ?? x.direction ?? x.message_type ?? "");
+          return { at: t && !Number.isNaN(Date.parse(t)) ? new Date(t).toISOString() : "", dir: (/reply|received|inbound/i.test(ty) ? "in" : "out") as "in" | "out", subject: clip(x.subject, 200), body: clip(x.email_body ?? x.body ?? x.text, 1500), src: "smartlead" }; })
+          .filter((x) => x.at && x.body) });
     }
     const total = Number(j.total_count ?? j.total ?? 0);
     if (items.length < 20 || (total && offset + 20 >= total)) break;
@@ -315,16 +319,20 @@ async function exPositives(key: string, since: string): Promise<Raw[]> {
 async function addLeads(doc: Doc): Promise<Report> {
   doc.leads ??= [];
   if ((doc.leadsVersion ?? 1) < 2) { doc.leads = []; doc.leadsVersion = 2; }      /* Nov 25: Smartlead leads redone with company, brand and reply text */
+  const refill = (doc.leadsVersion ?? 1) < 3;      /* Nov 26: go back to Nov 19 once to fetch each lead's email thread */
   const known = new Set(doc.leads.map((l) => l.id)), mails = new Set(doc.leads.map((l) => l.email.toLowerCase()).filter(Boolean));
   const last = doc.leads.reduce((a, l) => (l.at > a ? l.at : a), ""), back = new Date(Date.now() - 2 * 864e5).toISOString();
-  const since = !doc.leads.length || !last ? LEADS_FROM : back < LEADS_FROM ? LEADS_FROM : back;
+  const since = refill || !doc.leads.length || !last ? LEADS_FROM : back < LEADS_FROM ? LEADS_FROM : back;
   const dbg: Record<string, unknown> = { since }, errs: string[] = [], raw: Raw[] = [];
   if (process.env.SMARTLEAD_API_KEY) try { raw.push(...(await slPositives(process.env.SMARTLEAD_API_KEY, since, dbg))); } catch (e) { errs.push((e as Error).message.split(process.env.SMARTLEAD_API_KEY).join("***")); }
   if (process.env.EXPLEE_API_KEY) try { raw.push(...(await exPositives(process.env.EXPLEE_API_KEY, since))); } catch (e) { errs.push((e as Error).message); }
   const now = new Date().toISOString(); let added = 0;
   for (const r of raw.sort((a, b) => a.at.localeCompare(b.at))) {
     const em = r.email.toLowerCase();
-    if (known.has(r.id) || (em && mails.has(em))) continue;
+    if (known.has(r.id) || (em && mails.has(em))) {      /* already in the Pipeline: keep its thread up to date */
+      const ex = doc.leads.find((l) => l.id === r.id || (em && l.email.toLowerCase() === em)); if (ex && r.thread && r.thread.length) ex.thread = r.thread;
+      continue;
+    }
     if (!r.company && r.source === "Smartlead" && process.env.SMARTLEAD_API_KEY) r.company = await slCompany(process.env.SMARTLEAD_API_KEY, r.email);
     known.add(r.id); if (em) mails.add(em);
     const base = r.company || r.person || r.email; let n = base;
@@ -332,6 +340,7 @@ async function addLeads(doc: Doc): Promise<Report> {
     doc.leads.push({ ...r, n, st: "Positive reply", p: 20, who: "dan", t: "Cold", v: 0, step: "Book a call", due: dayAfter(r.at), added: now });
     added++;
   }
+  if (refill && !errs.length) doc.leadsVersion = 3;
   Object.assign(dbg, { found: raw.length, added, errors: errs });
   const ok = !errs.length || raw.length > 0;
   return { source: "Leads", ok, msg: added ? `${added} new positive repl${added === 1 ? "y" : "ies"} added to the Pipeline` : errs.length ? "New leads: " + errs[0] : "No new positive replies", debug: dbg };
