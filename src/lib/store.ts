@@ -15,12 +15,16 @@ export type Field = (typeof FIELDS)[number];
 export type BrandSplit = { glued?: Partial<Record<(typeof FLOW)[number], number>>; ds?: Partial<Record<(typeof FLOW)[number], number>> };
 export type DayChannel = Partial<Record<Field, number>> & { by_brand?: BrandSplit; src?: Partial<Record<Field, string>>; updated_at?: string; note?: string };
 export type Projection = { e: number | null; r: number | null };
+/* a positive reply from Smartlead or Explee, added to the Pipeline as a Cold deal for Daniel */
+export type Lead = { id: string; n: string; person: string; email: string; title?: string; company: string; domain?: string; b: 1 | 2; source: "Smartlead" | "Explee";
+  campaign: string; reply: string; at: string; st: string; p: number; who: string; t: string; v: number; step: string; due: string; added: string };
 export type Doc = {
   version: 1;
   days: Record<string, Partial<Record<Channel, DayChannel>>>;
   projections: Partial<Record<Channel, Record<string, Projection>>>;
   sync: Record<string, { at: string; ok: boolean; msg: string; backfilled_from?: string }>;
   log: { at: string; who: string; what: string }[];
+  leads: Lead[];
   updated_at: string | null;
 };
 
@@ -28,7 +32,7 @@ const KEY = "glide/sales-daily.json";
 const LOCAL = path.join(process.cwd(), ".data", "sales-daily.json");
 const blobOn = () => !!process.env.BLOB_READ_WRITE_TOKEN;
 
-export const emptyDoc = (): Doc => ({ version: 1, days: {}, projections: {}, sync: {}, log: [], updated_at: null });
+export const emptyDoc = (): Doc => ({ version: 1, days: {}, projections: {}, sync: {}, log: [], leads: [], updated_at: null });
 
 export async function readDoc(): Promise<Doc> { return (await readWithTag()).doc; }
 

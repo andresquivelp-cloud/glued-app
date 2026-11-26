@@ -1,4 +1,4 @@
-import { type Doc, type BrandSplit, setDay, addLog, todayInSV, updateDoc } from "./store";
+import { type Doc, type BrandSplit, type Lead, setDay, addLog, todayInSV, updateDoc } from "./store";
 
 // Refresh: pull Smartlead and Explee into the daily store.
 // Smartlead (ScaledMail and Mailin inboxes): emails sent, replies, bounces and positive replies per day, split Glued / Digital Socios
@@ -235,6 +235,92 @@ async function explee(doc: Doc, key: string, today: string): Promise<Report> {
   return { source: "Explee", ok: true, msg: `Explee: ${todaySent != null ? fmt(todaySent) + " sent today" : "nothing sent yet today"}, ${hot} hot leads in all`, debug: dbg };
 }
 
+/* ---------------- positive replies into the Pipeline ---------------- */
+// Every run adds each new positive reply as a deal: stage "Positive reply", Cold, 20%, Daniel, no value yet.
+// The first run goes back to Nov 19 (the last 7 days). After that each run looks two days back, and a reply already added is skipped.
+const LEADS_FROM = "2026-11-19T06:00:00.000Z";      // Nov 19, midnight in El Salvador
+const clip = (t: unknown, n = 600) => String(t ?? "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<br\s*\/?>/gi, "\n").replace(/<\/p>/gi, "\n").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#39;|&rsquo;/g, "'").replace(/&quot;/g, '"')
+  .split(/\n\s*(On .{5,80} wrote:|From: |-----Original)/)[0].replace(/\n{3,}/g, "\n\n").trim().slice(0, n);
+const dayAfter = (iso: string) => addDays(svDay(iso), 1);
+type Raw = Omit<Lead, "n" | "st" | "p" | "who" | "t" | "v" | "step" | "due" | "added">;
+
+async function slPositives(key: string, since: string, dbg: Record<string, unknown>): Promise<Raw[]> {
+  const cats = await sl<{ id: number; sentiment_type?: string }[]>(key, "/leads/fetch-categories").catch(() => []);
+  const pos = (Array.isArray(cats) ? cats : []).filter((c) => c.sentiment_type === "positive").map((c) => c.id);
+  const ids = pos.length ? pos.slice(0, 10) : [1, 2, 5];
+  const out: Raw[] = [];
+  for (let offset = 0; offset < 600; offset += 20) {
+    const qs = new URLSearchParams({ api_key: key, fetch_message_history: "false" });
+    const r = await fetch(`${SL}/master-inbox/inbox-replies?${qs}`, {
+      method: "POST", headers: { "content-type": "application/json" }, cache: "no-store", signal: AbortSignal.timeout(45000),
+      body: JSON.stringify({ offset, limit: 20, sortBy: "REPLY_TIME_DESC", filters: { leadCategories: { categoryIdsIn: ids }, replyTimeBetween: [since, new Date().toISOString()] } }),
+    });
+    const text = await r.text();
+    if (!r.ok) throw new Error(`Smartlead inbox said ${r.status}: ${text.slice(0, 160)}`);
+    const j = JSON.parse(text) as Record<string, unknown>;
+    const items = listOf(j, "messages", "data", "items", "leads");
+    if (offset === 0) dbg.sl_first = items[0] ? Object.keys(items[0]).slice(0, 30) : j && Object.keys(j);
+    for (const m of items) {
+      const lead = (m.lead ?? {}) as Record<string, unknown>, camp = (m.campaign ?? {}) as Record<string, unknown>, last = (m.last_message ?? {}) as Record<string, unknown>;
+      const email = String(lead.email ?? m.lead_email ?? m.email ?? ""), first = String(lead.first_name ?? m.lead_first_name ?? ""), lastN = String(lead.last_name ?? m.lead_last_name ?? "");
+      const at = String(last.received_at ?? m.last_reply_time ?? m.reply_time ?? m.last_activity ?? ""), cname = String(camp.name ?? m.campaign_name ?? "");
+      if (!email || !at) continue;
+      out.push({ id: "sl:" + String(m.campaign_lead_map_id ?? m.id ?? email), person: `${first} ${lastN}`.trim(), email, company: String(lead.company ?? lead.company_name ?? m.lead_company ?? ""),
+        domain: email.split("@")[1], b: brandOf(cname) === "ds" ? 2 : 1, source: "Smartlead", campaign: cname, reply: clip(last.body ?? m.last_reply ?? ""), at: new Date(at).toISOString() });
+    }
+    const total = Number(j.total_count ?? j.total ?? 0);
+    if (items.length < 20 || (total && offset + 20 >= total)) break;
+  }
+  return out;
+}
+
+async function exPositives(key: string, since: string): Promise<Raw[]> {
+  const camps = new Map<string, { name: string; b: 1 | 2 }>();
+  try {
+    const projects = listOf(await ex(key, "/autogtm/projects"), "projects", "items", "data");
+    const pb = new Map(projects.map((p) => [String(p.id ?? p.project_id), brandOf(`${p.domain ?? ""} ${p.name ?? ""}`) === "ds" ? 2 : 1] as const));
+    for (const c of listOf(await ex(key, "/autogtm/campaigns", { include_archived: "true" }), "campaigns", "items", "data"))
+      camps.set(String(c.id ?? c.campaign_id), { name: String(c.name ?? ""), b: (pb.get(String(c.project_id ?? "")) ?? (brandOf(String(c.name ?? "")) === "ds" ? 2 : 1)) as 1 | 2 });
+  } catch { /* brand falls back to Glued */ }
+  const out: Raw[] = [];
+  for (let offset = 0, guard = 0; guard < 20; guard++) {
+    const j = await ex<Record<string, unknown>>(key, "/autogtm/hot-leads", { limit: "200", offset: String(offset), since });
+    const leads = listOf(j, "leads", "items");
+    for (const l of leads) {
+      const at = String(l.became_hot_at ?? l.replied_at ?? ""); if (!at || at < since || l.erased) continue;
+      const c = camps.get(String(l.campaign_id)) ?? { name: "", b: 1 as const };
+      out.push({ id: `ex:${l.campaign_id}:${l.person_id}`, person: String(l.name ?? ""), email: String(l.email ?? ""), title: String(l.job_title ?? "") || undefined,
+        company: String(l.company_name ?? ""), domain: String(l.company_domain ?? "") || undefined, b: c.b, source: "Explee", campaign: c.name, reply: clip(l.why_hot), at: new Date(at).toISOString() });
+    }
+    if (!j.has_more || !leads.length) break;
+    offset = num(j.next_offset) ?? offset + leads.length;
+  }
+  return out;
+}
+
+async function addLeads(doc: Doc): Promise<Report> {
+  doc.leads ??= [];
+  const known = new Set(doc.leads.map((l) => l.id)), mails = new Set(doc.leads.map((l) => l.email.toLowerCase()).filter(Boolean));
+  const last = doc.leads.reduce((a, l) => (l.at > a ? l.at : a), ""), back = new Date(Date.now() - 2 * 864e5).toISOString();
+  const since = !doc.leads.length || !last ? LEADS_FROM : back < LEADS_FROM ? LEADS_FROM : back;
+  const dbg: Record<string, unknown> = { since }, errs: string[] = [], raw: Raw[] = [];
+  if (process.env.SMARTLEAD_API_KEY) try { raw.push(...(await slPositives(process.env.SMARTLEAD_API_KEY, since, dbg))); } catch (e) { errs.push((e as Error).message.split(process.env.SMARTLEAD_API_KEY).join("***")); }
+  if (process.env.EXPLEE_API_KEY) try { raw.push(...(await exPositives(process.env.EXPLEE_API_KEY, since))); } catch (e) { errs.push((e as Error).message); }
+  const now = new Date().toISOString(); let added = 0;
+  for (const r of raw.sort((a, b) => a.at.localeCompare(b.at))) {
+    const em = r.email.toLowerCase();
+    if (known.has(r.id) || (em && mails.has(em))) continue;
+    known.add(r.id); if (em) mails.add(em);
+    const base = r.company || r.person || r.email; let n = base;
+    for (let i = 2; doc.leads.some((l) => l.n === n); i++) n = r.person && r.person !== base && i === 2 ? `${base} (${r.person})` : `${base} ${i}`;
+    doc.leads.push({ ...r, n, st: "Positive reply", p: 20, who: "dan", t: "Cold", v: 0, step: "Book a call", due: dayAfter(r.at), added: now });
+    added++;
+  }
+  Object.assign(dbg, { found: raw.length, added, errors: errs });
+  const ok = !errs.length || raw.length > 0;
+  return { source: "Leads", ok, msg: added ? `${added} new positive repl${added === 1 ? "y" : "ies"} added to the Pipeline` : errs.length ? "New leads: " + errs[0] : "No new positive replies", debug: dbg };
+}
+
 /* ---------------- run ---------------- */
 
 export async function runSync(who: string, opts: { full?: boolean } = {}): Promise<{ doc: Doc; report: Report[] }> {
@@ -254,6 +340,7 @@ export async function runSync(who: string, opts: { full?: boolean } = {}): Promi
         report.push({ source: name, ok: false, msg: `${name} failed: ${msg}` });
       }
     }
+    try { report.push(await addLeads(doc)); } catch (e) { report.push({ source: "Leads", ok: false, msg: "New leads failed: " + (e as Error).message }); }
     addLog(doc, who, "refresh: " + report.map((r) => r.msg).join(" · "));
   });
   return { doc, report };
